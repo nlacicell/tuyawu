@@ -1,2 +1,1 @@
-tuya-connector-python
 requests
