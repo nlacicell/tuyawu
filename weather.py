@@ -98,7 +98,7 @@ try:
     rain_in = rain_mm * 0.0393701
 
     # --- 5. FELTÖLTÉS WEATHER UNDERGROUND-RA ---
-    https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php
+    wu_url = "https://wunderground.com"
     params = {
         "ID": WU_STATION_ID,
         "PASSWORD": WU_STATION_KEY,
