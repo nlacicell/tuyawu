@@ -3,7 +3,6 @@ import time
 import hmac
 import hashlib
 import requests
-import base64
 
 # --- 1. PROJEKT ÉS ESZKÖZ ADATOK (GITHUB SECRETS) ---
 ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
@@ -13,7 +12,7 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-# A működő európai Tuya OpenAPI szervercím
+# A hivatalos európai Tuya OpenAPI szervercím
 BASE_URL = "https://openapi.tuyaeu.com"
 
 # --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
@@ -35,15 +34,16 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. IDŐJÁRÁS-ADAT LEKÉRÉS A NAPLÓKBÓL ÉS ADATOKBÓL ---
+# --- 3. TUYA ADATOK LEKÉRÉSE ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
 
+    # Lekérjük a státuszt, a specifikációkat és az utolsó logokat is, hogy minden adat meglegyen
     endpoints = [
         f"/v1.0/devices/{DEVICE_ID}/status",
         f"/v1.0/devices/{DEVICE_ID}/specifications",
-        f"/v1.0/devices/{DEVICE_ID}/logs?codes=outdoor_alert_display"
+        f"/v1.0/devices/{DEVICE_ID}/logs"
     ]
 
     for path in endpoints:
@@ -64,10 +64,12 @@ def get_weather_station_data(token):
                 res_json = res.json()
                 result_obj = res_json.get("result", {})
                 
+                # Ha listát kapunk vissza (pl. status végpont)
                 if isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
+                # Ha szótárat kapunk vissza (pl. logs vagy specifications végpont)
                 elif isinstance(result_obj, dict):
                     if "logs" in result_obj:
                         for log_item in result_obj.get("logs", []):
@@ -90,65 +92,76 @@ try:
     data = get_weather_station_data(token)
     print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
     
-    # Biztonságos alapértelmezett értékek
-    temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
+    # --- 4. ADATOK FELDOLGOZÁSA A LOGOK alapján ---
     
-    # --- 4. A BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
-    encoded_stream = data.get("outdoor_alert_display")
+    # Külső hőmérséklet lekérése (Megpróbálja a tipikus neveket, ha nincs meg, 0)
+    # Ha a Tuya tizedesjegy nélkül küldi (pl. 235 = 23.5°C), akkor leosztjuk 10-zel
+    temp_c = data.get("outdoor_temp", data.get("temp_outdoor", data.get("va_temperature", 0)))
+    try:
+        temp_c = float(temp_c)
+        if temp_c > 80 or temp_c < -40:
+            temp_c = temp_c / 10.0
+    except (ValueError, TypeError):
+        temp_c = 0.0
+    temp_f = (temp_c * 9/5) + 32
     
-    if encoded_stream:
-        raw_bytes = base64.b64decode(encoded_stream)
-        print(f"Dekódolt bájtok: {list(raw_bytes)}")
-        
-        if len(raw_bytes) >= 15:
-            # Külső hőmérséklet (3-4. bájt)
-            raw_temp = int.from_bytes(raw_bytes[3:5], byteorder='big', signed=True)
-            temp_c = raw_temp / 10.0
-            temp_f = (temp_c * 9/5) + 32
-            
-            # Külső páratartalom (5. bájt)
-            if len(raw_bytes) > 5:
-                humidity = int(raw_bytes[5])
-            
-            # Szélsebesség (6-7. bájt)
-            raw_wind = int.from_bytes(raw_bytes[6:8], byteorder='big')
-            wind_kmh = raw_wind / 10.0
-            wind_mph = wind_kmh * 0.621371
-            
-            # Széllökés (8-9. bájt)
-            raw_gust = int.from_bytes(raw_bytes[8:10], byteorder='big')
-            gust_kmh = raw_gust / 10.0
-            gust_mph = gust_kmh * 0.621371
-            
-            # Szélirány (10-11. bájt)
-            wind_dir = int.from_bytes(raw_bytes[10:12], byteorder='big')
-            
-            # Légnyomás (12-13. bájt)
-            raw_baro = int.from_bytes(raw_bytes[12:14], byteorder='big')
-            baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
-            if baro_hpa < 500: baro_hpa = 1013.2
-            baro_in = baro_hpa * 0.02953
-            
-            # Csapadék (14-15. bájt)
-            if len(raw_bytes) >= 16:
-                raw_rain = int.from_bytes(raw_bytes[14:16], byteorder='big')
-                rain_mm = raw_rain / 10.0
-                rain_in = rain_mm * 0.0393701
+    # Külső páratartalom (A logodban pontosan 'outdoor humidity' névvel szerepel)
+    humidity = data.get("outdoor humidity", data.get("humidity_outdoor", 0))
+    try:
+        humidity = int(float(humidity))
+    except (ValueError, TypeError):
+        humidity = 0
 
-            print(f"Szenzorértékek -> Temp: {round(temp_c,1)}C, Pára: {humidity}%, Szél: {round(wind_kmh,1)}km/h, Irány: {wind_dir}fok, Nyomás: {round(baro_hpa,1)}hPa")
-    else:
-        print("Nem található 'outdoor_alert_display', alapértelmezett értékeket használunk.")
-        raw_baro = data.get("pressure", data.get("pressure_current", 10132))
-        baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
-        baro_in = baro_hpa * 0.02953
+    # Szélsebesség (A logodban: 'wind_speed' kmph-ban) -> Átváltás mph-ba
+    wind_kmh = data.get("wind_speed", 0)
+    try:
+        wind_mph = float(wind_kmh) * 0.621371
+    except (ValueError, TypeError):
+        wind_mph = 0.0
 
-    # --- 5. JAVÍTOTT WEATHER UNDERGROUND CÍM (PWS UPLOAD PROTOCOL) ---
-    # A hivatalos és működő feltöltési API végpont
+    # Széllökés (A logodban: 'Wind Gust' kmph-ban) -> Átváltás mph-ba
+    gust_kmh = data.get("Wind Gust", 0)
+    try:
+        gust_mph = float(gust_kmh) * 0.621371
+    except (ValueError, TypeError):
+        gust_mph = 0.0
+
+    # Szélirány (Megpróbálja a leggyakoribb Tuya kódokat)
+    wind_dir = data.get("wind_dir", data.get("Wind Direction", data.get("va_direction", 0)))
+    try:
+        wind_dir = int(float(wind_dir))
+    except (ValueError, TypeError):
+        wind_dir = 0
+
+    # Légnyomás (A logodban: 'indoor_pressure' hPa-ban) -> Átváltás inHg-ba
+    # Ha a Tuya tizedesjegy nélkül adja meg (pl. 99760 = 997.6 hPa), leosztjuk 100-zal vagy 10-zel
+    baro_hpa = data.get("indoor_pressure", data.get("pressure_current", 1013.2))
+    try:
+        baro_hpa = float(baro_hpa)
+        if baro_hpa > 5000:
+            baro_hpa = baro_hpa / 100.0
+        elif baro_hpa > 2000:
+            baro_hpa = baro_hpa / 10.0
+    except (ValueError, TypeError):
+        baro_hpa = 1013.2
+    baro_in = baro_hpa * 0.02953
+
+    # Csapadék (A logodban: 'rainfall' mm-ben) -> Átváltás inch-be
+    rain_mm = data.get("rainfall", 0)
+    try:
+        rain_in = float(rain_mm) * 0.0393701
+    except (ValueError, TypeError):
+        rain_in = 0.0
+
+    print(f"Feldolgozott értékek -> Temp: {round(temp_c,1)}°C ({round(temp_f,1)}°F), Pára: {humidity}%, Szél: {round(wind_mph,1)} mph, Nyomás: {round(baro_in,2)} inHg")
+
+    # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND PWS PROTOKOLLON ---
+    # Ez a hivatalos, működő backend API címe a szenzoradatok fogadására
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
     
     params = {
         "ID": WU_STATION_ID,
-        "PASSWORD": WU_STATION_KEY, # Itt a WU felületén generált Station Key-t kell használni!
+        "PASSWORD": WU_STATION_KEY,
         "dateutc": "now",
         "tempf": round(temp_f, 1),
         "humidity": int(humidity),
@@ -157,18 +170,18 @@ try:
         "winddir": int(wind_dir),
         "baromin": round(baro_in, 2),
         "rainin": round(rain_in, 2),
-        "softwaretype": "TuyaPythonGateway",
+        "softwaretype": "TuyaWeatherGateway",
         "action": "updateraw"
     }
     
-    # Az adatok küldése GET kéréssel a PWS protokoll szerint
+    # Adatküldés
     wu_response = requests.get(wu_url, params=params)
     print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
     
     if "success" in wu_response.text.lower():
-        print("Az adatfeltöltés sikeres volt!")
+        print("Az adatfeltöltés sikeresen befejeződött!")
     else:
-        print("A WU szervere elutasította az adatokat. Ellenőrizd az ID-t és a Station Key-t.")
+        print("Figyelem: A WU szervere válaszolt, de nem igazolta vissza a sikeres mentést.")
 
 except Exception as e:
     print("Hiba történt a futtatás során:", e)
