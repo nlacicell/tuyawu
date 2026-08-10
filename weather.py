@@ -33,69 +33,86 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. KÉTUTAS ADATLEKÉRÉS A TUYA-BÓL ---
-def get_all_device_data(token):
+# --- 3. ADATLEKÉRÉS A TUYA-BÓL ---
+def get_tuya_status(token):
     t = str(int(time.time() * 1000))
+    url_path = f"/v1.0/devices/{DEVICE_ID}/status"
+    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
-    # 1. út: Status API (ezt használtuk eddig)
-    path_status = f"/v1.0/devices/{DEVICE_ID}/status"
-    sign_status = hmac.new(ACCESS_SECRET.encode('utf-8'), f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path_status}".encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    res_status = requests.get(f"{BASE_URL}{path_status}", headers={"client_id": ACCESS_ID, "access_token": token, "sign": sign_status, "t": t, "sign_method": "HMAC-SHA256"})
+    headers = {
+        "client_id": ACCESS_ID,
+        "access_token": token,
+        "sign": sign,
+        "t": t,
+        "sign_method": "HMAC-SHA256"
+    }
     
-    # 2. út: Specifications/Properties API (itt laknak az időjárás számos DP értékei)
-    path_spec = f"/v1.0/devices/{DEVICE_ID}/specifications"
-    sign_spec = hmac.new(ACCESS_SECRET.encode('utf-8'), f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path_spec}".encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    res_spec = requests.get(f"{BASE_URL}{path_spec}", headers={"client_id": ACCESS_ID, "access_token": token, "sign": sign_spec, "t": t, "sign_method": "HMAC-SHA256"})
-    
-    combined_data = {}
-    
-    if res_status.status_code == 200 and res_status.json().get("success"):
-        for item in res_status.json().get("result", []):
-            combined_data[str(item["code"])] = item["value"]
-            
-    if res_spec.status_code == 200 and res_spec.json().get("success"):
-        properties = res_spec.json().get("result", {}).get("properties", [])
-        for item in properties:
-            combined_data[str(item["code"])] = item["value"]
-            
-    return combined_data
+    res = requests.get(f"{BASE_URL}{url_path}", headers=headers)
+    if res.status_code == 200 and res.json().get("success"):
+        return res.json()["result"]
+    raise Exception(f"Státusz hiba: {res.text}")
 
 try:
     token = get_tuya_token()
-    data = get_all_device_data(token)
-    print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
+    status_list = get_tuya_status(token)
     
-    # --- 4. SZÁMÍTÁSOK ÉS ANALÍZIS (Vevor Numerikus sémák és nevek alapján) ---
-    # Külső Hőmérséklet (Keresi a '1', '101', 'temp_current', 'va_temperature' kódokat)
-    raw_temp = data.get("1", data.get("101", data.get("temp_current", data.get("va_temperature", 0))))
-    temp_c = raw_temp / 10.0 if raw_temp > 60 or raw_temp < -40 else raw_temp
-    temp_f = (temp_c * 9/5) + 32
+    data = {item["code"]: item["value"] for item in status_list}
+    print("Sikeres lekérés! Nyers Tuya adatok:\n", data)
     
-    # Külső Páratartalom ('2', '102', 'humidity_current')
-    humidity = data.get("2", data.get("102", data.get("humidity_current", data.get("va_humidity", 0))))
+    # Alapértelmezett értékek biztonsági mentésként
+    temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
     
-    # Szélsebesség ('4', '105', 'wind_speed')
-    raw_wind = data.get("4", data.get("105", data.get("wind_speed", 0)))
-    wind_kmh = raw_wind / 10.0 if raw_wind > 150 else raw_wind
-    wind_mph = wind_kmh * 0.621371
+    # --- 4. A SPECIÁLIS BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
+    encoded_stream = data.get("outdoor_alert_display")
     
-    # Széllökés ('5', '106', 'gust_speed')
-    raw_gust = data.get("5", data.get("106", data.get("gust_speed", 0)))
-    gust_kmh = raw_gust / 10.0 if raw_gust > 150 else raw_gust
-    gust_mph = gust_kmh * 0.621371
-    
-    # Szélirány ('7', '107', 'wind_direction')
-    wind_dir = data.get("7", data.get("107", data.get("wind_direction", 0)))
-    
-    # Légnyomás ('10', '111', 'pressure_current')
-    raw_baro = data.get("10", data.get("111", data.get("pressure_current", data.get("pressure", 1013))))
-    baro_hpa = raw_baro / 10.0 if raw_baro > 1200 else raw_baro
-    baro_in = baro_hpa * 0.02953
-    
-    # Csapadék ('13', '113', 'rain_current')
-    raw_rain = data.get("13", data.get("113", data.get("rain_current", data.get("rain_24h", 0))))
-    rain_mm = raw_rain / 10.0 if raw_rain > 500 else raw_rain
-    rain_in = rain_mm * 0.0393701
+    if encoded_stream:
+        # Dekódoljuk a szöveget nyers bájtokká
+        raw_bytes = base64.b64decode(encoded_stream)
+        print(f"Dekódolt bájtok hossza: {len(raw_bytes)} bytes. Nyers bájtok: {list(raw_bytes)}")
+        
+        # A Vevor / Tuya PWS szabványos bájthelyeinek (offset) feldolgozása
+        if len(raw_bytes) >= 15:
+            # Külső hőmérséklet (2 bájtos előjeles egész a 3-4. bájton)
+            raw_temp = int.from_bytes(raw_bytes[3:5], byteorder='big', signed=True)
+            temp_c = raw_temp / 10.0
+            temp_f = (temp_c * 9/5) + 32
+            
+            # Külső páratartalom (1 bájt az 5. bájton)
+            humidity = raw_bytes[5]
+            
+            # Szélsebesség (2 bájt a 6-7. bájton, km/h * 10)
+            raw_wind = int.from_bytes(raw_bytes[6:8], byteorder='big')
+            wind_kmh = raw_wind / 10.0
+            wind_mph = wind_kmh * 0.621371
+            
+            # Széllökés (2 bájt a 8-9. bájton, km/h * 10)
+            raw_gust = int.from_bytes(raw_bytes[8:10], byteorder='big')
+            gust_kmh = raw_gust / 10.0
+            gust_mph = gust_kmh * 0.621371
+            
+            # Szélirány fokban (2 bájt a 10-11. bájton)
+            wind_dir = int.from_bytes(raw_bytes[10:12], byteorder='big')
+            
+            # Légnyomás (2 bájt a 12-13. bájton, hPa * 10)
+            raw_baro = int.from_bytes(raw_bytes[12:14], byteorder='big')
+            baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
+            if baro_hpa < 500: baro_hpa = 1013.2 # Biztonsági alapértelmezés ha üres
+            baro_in = baro_hpa * 0.02953
+            
+            # Csapadék (2 bájt a 14-15. bájton, mm * 10)
+            if len(raw_bytes) >= 16:
+                raw_rain = int.from_bytes(raw_bytes[14:16], byteorder='big')
+                rain_mm = raw_rain / 10.0
+                rain_in = rain_mm * 0.0393701
+
+            print(f"Kicsomagolt adatok -> Temp: {round(temp_c,1)}C, Pára: {humidity}%, Szél: {round(wind_kmh,1)}km/h, Irány: {wind_dir}fok, Nyomás: {round(baro_hpa,1)}hPa")
+    else:
+        print("FIGYELEM: Nem található 'outdoor_alert_display' adatpont a Tuya válaszában!")
+        # Ha nincs tömb, megpróbáljuk a meglévő alap nyers adatokból kiszedni a légnyomást
+        raw_baro = data.get("pressure", data.get("pressure_current", 10132))
+        baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
+        baro_in = baro_hpa * 0.02953
 
     # --- 5. FELTÖLTÉS WEATHER UNDERGROUND-RA ---
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
