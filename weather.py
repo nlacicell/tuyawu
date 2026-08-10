@@ -13,7 +13,7 @@ WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 # Fix, pontos európai végpont (közvetlen hívás)
-BASE_URL = "https://tuyaeu.com"
+BASE_URL = "https://openapi.tuyaeu.com"
 
 # --- 2. TUYA CLOUD API HITELESÍTÉS (TOKEN LEKÉRÉS) ---
 def get_tuya_token():
