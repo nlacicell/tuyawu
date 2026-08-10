@@ -12,24 +12,26 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-# Fix, pontos európai végpont (közvetlen hívás)
-BASE_URL = "https://openapi.tuyaeu.com"
+BASE_URL = "https://tuyaeu.com"
 
 # --- 2. TUYA CLOUD API HITELESÍTÉS (TOKEN LEKÉRÉS) ---
 def get_tuya_token():
     t = str(int(time.time() * 1000))
-    # Aláírás (sign) generálása a Tuya biztonsági előírásai szerint
-    sign_str = ACCESS_ID + t
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    url_path = "/v1.0/token?grant_type=1"
+    
+    # Hivatalos Tuya v2 Aláírás számítás
+    string_to_sign = f"{ACCESS_ID}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
     headers = {
         "client_id": ACCESS_ID,
         "sign": sign,
         "t": t,
-        "sign_method": "HMAC-SHA256"
+        "sign_method": "HMAC-SHA256",
+        "Content-Type": "application/json"
     }
     
-    res = requests.get(f"{BASE_URL}/v1.0/token?grant_type=1", headers=headers)
+    res = requests.get(f"{BASE_URL}{url_path}", headers=headers)
     if res.status_code == 200 and res.json().get("success"):
         return res.json()["result"]["access_token"]
     else:
@@ -38,29 +40,31 @@ def get_tuya_token():
 # --- 3. ESZKÖZ STÁTUSZ LEKÉRÉSE ---
 def get_device_status(token):
     t = str(int(time.time() * 1000))
-    sign_str = ACCESS_ID + token + t
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    url_path = f"/v1.0/devices/{DEVICE_ID}/status"
+    
+    # Hivatalos Tuya v2 Aláírás számítás tokennel együtt
+    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
     headers = {
         "client_id": ACCESS_ID,
         "access_token": token,
         "sign": sign,
         "t": t,
-        "sign_method": "HMAC-SHA256"
+        "sign_method": "HMAC-SHA256",
+        "Content-Type": "application/json"
     }
     
-    res = requests.get(f"{BASE_URL}/v1.0/devices/{DEVICE_ID}/status", headers=headers)
+    res = requests.get(f"{BASE_URL}{url_path}", headers=headers)
     if res.status_code == 200 and res.json().get("success"):
         return res.json()["result"]
     else:
         raise Exception(f"Eszköz lekérési hiba: {res.text}")
 
 try:
-    # Folyamat indítása
     token = get_tuya_token()
     stats = get_device_status(token)
     
-    # Adatpontok kicsomagolása
     data = {item["code"]: item["value"] for item in stats}
     print("Sikeres lekérés! Nyers Tuya adatok:\n", data)
     
