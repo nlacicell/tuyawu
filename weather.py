@@ -36,7 +36,7 @@ def get_tuya_token():
 # --- 3. ADATLEKÉRÉS A TUYA-BÓL ---
 def get_tuya_status(token):
     t = str(int(time.time() * 1000))
-    url_path = f"/v1.0/devices/{DEVICE_ID}/status"
+    url_path = f"/v1.0/devices/{DEVICE_ID}/specifications"
     string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
     sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
@@ -48,7 +48,7 @@ def get_tuya_status(token):
         "sign_method": "HMAC-SHA256"
     }
     
-    res = requests.get(f"{BASE_URL}{url_path}", headers=headers)
+    res = requests.get(f"{BASE_URL}{url_path}", headers={"client_id": ACCESS_ID, "access_token": token, "sign": sign, "t": t, "sign_method": "HMAC-SHA256"})
     if res.status_code == 200 and res.json().get("success"):
         return res.json()["result"]
     raise Exception(f"Státusz hiba: {res.text}")
