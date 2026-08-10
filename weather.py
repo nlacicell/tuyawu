@@ -13,8 +13,8 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-# A MEGBESZÉLT JÓ CÍMEK:
-BASE_URL = "https://openapi.tuyaeu.com"
+# 1. JÓ CÍM: A működő európai Tuya OpenAPI szervercím
+BASE_URL = "https://tuyaeu.com"
 
 # --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
 def get_tuya_token():
@@ -35,14 +35,16 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. SPECIÁLIS IDŐJÁRÁS-ADAT LEKÉRÉS A TUYA-BÓL ---
+# --- 3. SPECIÁLIS IDŐJÁRÁS-ADAT LEKÉRÉS A NAPLÓKBÓL IS ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
 
+    # 3 különböző Tuya API végpontot kérdezünk le, beleértve a valós idejű logokat is!
     endpoints = [
         f"/v1.0/devices/{DEVICE_ID}/status",
-        f"/v1.0/devices/{DEVICE_ID}/specifications"
+        f"/v1.0/devices/{DEVICE_ID}/specifications",
+        f"/v1.0/devices/{DEVICE_ID}/logs?codes=outdoor_alert_display"
     ]
 
     for path in endpoints:
@@ -68,6 +70,11 @@ def get_weather_station_data(token):
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
                 elif isinstance(result_obj, dict):
+                    if "logs" in result_obj:
+                        for log_item in result_obj.get("logs", []):
+                            if isinstance(log_item, dict) and "code" in log_item and "value" in log_item:
+                                combined_data[str(log_item["code"])] = log_item["value"]
+                    
                     for sub_key in ["properties", "status", "functions"]:
                         sub_list = result_obj.get(sub_key, [])
                         if isinstance(sub_list, list):
@@ -84,7 +91,6 @@ try:
     data = get_weather_station_data(token)
     print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
     
-    # Alapértelmezett értékek biztonsági mentésként
     temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
     
     # --- 4. A BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
@@ -136,8 +142,8 @@ try:
         baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
         baro_in = baro_hpa * 0.02953
 
-    # A MŰKÖDŐ, JÓ KÖZVETLEN CÍM:
-    wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
+    # 2. JÓ CÍM: A Weather Underground hivatalos, hosszú, működő HTTPS címe
+    wu_url = "https://wunderground.com"
     
     params = {
         "ID": WU_STATION_ID,
