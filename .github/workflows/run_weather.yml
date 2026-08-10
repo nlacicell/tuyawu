@@ -1,4 +1,4 @@
-name: Update Vevor Weather Data
+name: Update Vevor Weather Data 2
 
 on:
   schedule:
