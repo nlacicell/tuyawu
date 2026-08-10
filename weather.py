@@ -3,6 +3,7 @@ import time
 import hmac
 import hashlib
 import requests
+import base64
 
 # --- 1. PROJEKT ÉS ESZKÖZ ADATOK (GITHUB SECRETS) ---
 ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
@@ -12,6 +13,7 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
+# A MEGBESZÉLT JÓ CÍMEK:
 BASE_URL = "https://openapi.tuyaeu.com"
 
 # --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
@@ -38,7 +40,6 @@ def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
 
-    # Biztonsági okokból mind a két lehetséges végpontot lekérdezzük hibatűrő módon
     endpoints = [
         f"/v1.0/devices/{DEVICE_ID}/status",
         f"/v1.0/devices/{DEVICE_ID}/specifications"
@@ -62,12 +63,10 @@ def get_weather_station_data(token):
                 res_json = res.json()
                 result_obj = res_json.get("result", {})
                 
-                # Ha lista formátumban jön vissza (pl. status)
                 if isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
-                # Ha összetett objektum formátumban jön vissza (pl. specifications)
                 elif isinstance(result_obj, dict):
                     for sub_key in ["properties", "status", "functions"]:
                         sub_list = result_obj.get(sub_key, [])
@@ -76,66 +75,70 @@ def get_weather_station_data(token):
                                 if isinstance(item, dict) and "code" in item and "value" in item:
                                     combined_data[str(item["code"])] = item["value"]
         except Exception:
-            pass # Ha az egyik végpont épp nem elérhető, megyünk a következőre
+            pass
             
-    return combined_data)
+    return combined_data
+
+try:
+    token = get_tuya_token()
+    data = get_weather_station_data(token)
+    print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
     
     # Alapértelmezett értékek biztonsági mentésként
     temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
     
-    # --- 4. A SPECIÁLIS BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
+    # --- 4. A BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
     encoded_stream = data.get("outdoor_alert_display")
     
     if encoded_stream:
-        # Dekódoljuk a szöveget nyers bájtokká
         raw_bytes = base64.b64decode(encoded_stream)
-        print(f"Dekódolt bájtok hossza: {len(raw_bytes)} bytes. Nyers bájtok: {list(raw_bytes)}")
+        print(f"Dekódolt bájtok: {list(raw_bytes)}")
         
-        # A Vevor / Tuya PWS szabványos bájthelyeinek (offset) feldolgozása
         if len(raw_bytes) >= 15:
-            # Külső hőmérséklet (2 bájtos előjeles egész a 3-4. bájton)
+            # Külső hőmérséklet (3-4. bájt)
             raw_temp = int.from_bytes(raw_bytes[3:5], byteorder='big', signed=True)
             temp_c = raw_temp / 10.0
             temp_f = (temp_c * 9/5) + 32
             
-            # Külső páratartalom (1 bájt az 5. bájton)
-            humidity = raw_bytes[5]
+            # Külső páratartalom (5. bájt)
+            if len(raw_bytes) > 5:
+                humidity = int(raw_bytes[5])
             
-            # Szélsebesség (2 bájt a 6-7. bájton, km/h * 10)
+            # Szélsebesség (6-7. bájt)
             raw_wind = int.from_bytes(raw_bytes[6:8], byteorder='big')
             wind_kmh = raw_wind / 10.0
             wind_mph = wind_kmh * 0.621371
             
-            # Széllökés (2 bájt a 8-9. bájton, km/h * 10)
+            # Széllökés (8-9. bájt)
             raw_gust = int.from_bytes(raw_bytes[8:10], byteorder='big')
             gust_kmh = raw_gust / 10.0
             gust_mph = gust_kmh * 0.621371
             
-            # Szélirány fokban (2 bájt a 10-11. bájton)
+            # Szélirány (10-11. bájt)
             wind_dir = int.from_bytes(raw_bytes[10:12], byteorder='big')
             
-            # Légnyomás (2 bájt a 12-13. bájton, hPa * 10)
+            # Légnyomás (12-13. bájt)
             raw_baro = int.from_bytes(raw_bytes[12:14], byteorder='big')
             baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
-            if baro_hpa < 500: baro_hpa = 1013.2 # Biztonsági alapértelmezés ha üres
+            if baro_hpa < 500: baro_hpa = 1013.2
             baro_in = baro_hpa * 0.02953
             
-            # Csapadék (2 bájt a 14-15. bájton, mm * 10)
+            # Csapadék (14-15. bájt)
             if len(raw_bytes) >= 16:
                 raw_rain = int.from_bytes(raw_bytes[14:16], byteorder='big')
                 rain_mm = raw_rain / 10.0
                 rain_in = rain_mm * 0.0393701
 
-            print(f"Kicsomagolt adatok -> Temp: {round(temp_c,1)}C, Pára: {humidity}%, Szél: {round(wind_kmh,1)}km/h, Irány: {wind_dir}fok, Nyomás: {round(baro_hpa,1)}hPa")
+            print(f"Szenzorértékek -> Temp: {round(temp_c,1)}C, Pára: {humidity}%, Szél: {round(wind_kmh,1)}km/h, Irány: {wind_dir}fok, Nyomás: {round(baro_hpa,1)}hPa")
     else:
-        print("FIGYELEM: Nem található 'outdoor_alert_display' adatpont a Tuya válaszában!")
-        # Ha nincs tömb, megpróbáljuk a meglévő alap nyers adatokból kiszedni a légnyomást
+        print("Nem található 'outdoor_alert_display', alapértelmezett értékeket használunk.")
         raw_baro = data.get("pressure", data.get("pressure_current", 10132))
         baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
         baro_in = baro_hpa * 0.02953
 
-    # --- 5. FELTÖLTÉS WEATHER UNDERGROUND-RA ---
+    # A MŰKÖDŐ, JÓ KÖZVETLEN CÍM:
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
+    
     params = {
         "ID": WU_STATION_ID,
         "PASSWORD": WU_STATION_KEY,
@@ -151,7 +154,7 @@ def get_weather_station_data(token):
     }
     
     wu_response = requests.get(wu_url, params=params)
-    print(f"\nWU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
+    print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
 
 except Exception as e:
     print("Hiba történt a futtatás során:", e)
