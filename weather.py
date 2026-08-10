@@ -1,37 +1,70 @@
 import os
 import time
+import hmac
+import hashlib
 import requests
-from tuya_connector import TuyaOpenAPI, TUYA_LOGGER
 
-# --- 1. PROJEKT ÉS ESZKÖZ ADATOK (A GITHUB SECRETS-BŐL OLVASVA) ---
-TUYA_ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
-TUYA_ACCESS_SECRET = os.environ.get("TUYA_ACCESS_SECRET")
-TUYA_DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
+# --- 1. PROJEKT ÉS ESZKÖZ ADATOK (GITHUB SECRETS) ---
+ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
+ACCESS_SECRET = os.environ.get("TUYA_ACCESS_SECRET")
+DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 
-# JAVÍTÁS: A hivatalos Tuya API Endpoint és az Európai régió kód ('eu')
-TUYA_API_ENDPOINT = "https://tuyaeu.com"
-TUYA_REGION = "eu" 
-
-# --- WEATHER UNDERGROUND REGISZTRÁCIÓS ADATOK ---
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-# --- 2. KAPCSOLÓDÁS A TUYA FELHŐHÖZ ---
-# Itt már átadjuk a pontos régiókódot is, így nem fog eltévedni a szerver
-openapi = TuyaOpenAPI(TUYA_API_ENDPOINT, TUYA_ACCESS_ID, TUYA_ACCESS_SECRET, TUYA_REGION)
-openapi.connect()
+# Fix, pontos európai végpont (közvetlen hívás)
+BASE_URL = "https://tuyaeu.com"
 
-# Az eszköz aktuális státuszának lekérése
-response = openapi.get(f"/v1.0/devices/{TUYA_DEVICE_ID}/status")
-
-if response.get("success"):
-    stats = response.get("result", [])
+# --- 2. TUYA CLOUD API HITELESÍTÉS (TOKEN LEKÉRÉS) ---
+def get_tuya_token():
+    t = str(int(time.time() * 1000))
+    # Aláírás (sign) generálása a Tuya biztonsági előírásai szerint
+    sign_str = ACCESS_ID + t
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
-    # Adatpontok kicsomagolása egy kulcs-érték szótárba
+    headers = {
+        "client_id": ACCESS_ID,
+        "sign": sign,
+        "t": t,
+        "sign_method": "HMAC-SHA256"
+    }
+    
+    res = requests.get(f"{BASE_URL}/v1.0/token?grant_type=1", headers=headers)
+    if res.status_code == 200 and res.json().get("success"):
+        return res.json()["result"]["access_token"]
+    else:
+        raise Exception(f"Token hiba: {res.text}")
+
+# --- 3. ESZKÖZ STÁTUSZ LEKÉRÉSE ---
+def get_device_status(token):
+    t = str(int(time.time() * 1000))
+    sign_str = ACCESS_ID + token + t
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), sign_str.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    
+    headers = {
+        "client_id": ACCESS_ID,
+        "access_token": token,
+        "sign": sign,
+        "t": t,
+        "sign_method": "HMAC-SHA256"
+    }
+    
+    res = requests.get(f"{BASE_URL}/v1.0/devices/{DEVICE_ID}/status", headers=headers)
+    if res.status_code == 200 and res.json().get("success"):
+        return res.json()["result"]
+    else:
+        raise Exception(f"Eszköz lekérési hiba: {res.text}")
+
+try:
+    # Folyamat indítása
+    token = get_tuya_token()
+    stats = get_device_status(token)
+    
+    # Adatpontok kicsomagolása
     data = {item["code"]: item["value"] for item in stats}
     print("Sikeres lekérés! Nyers Tuya adatok:\n", data)
     
-    # --- 3. METRIKÁK KINYERÉSE (A VEVOR TUYA SÉMÁJA ALAPJÁN) ---
+    # --- 4. METRIKÁK KINYERÉSE ÉS ÁTVÁLTÁSA ---
     raw_temp = data.get("temp_current", data.get("va_temperature", 0))
     temp_c = raw_temp / 10.0 if raw_temp > 60 or raw_temp < -40 else raw_temp
     temp_f = (temp_c * 9/5) + 32
@@ -56,9 +89,8 @@ if response.get("success"):
     rain_mm = raw_rain / 10.0 if raw_rain > 500 else raw_rain
     rain_in = rain_mm * 0.0393701
 
-    # --- 4. HTTP GET KÉRÉS INDÍTÁSA A WEATHER UNDERGROUND FELÉ ---
+    # --- 5. FELTÖLTÉS WEATHER UNDERGROUND-RA ---
     wu_url = "http://wunderground.com"
-    
     params = {
         "ID": WU_STATION_ID,
         "PASSWORD": WU_STATION_KEY,
@@ -76,5 +108,6 @@ if response.get("success"):
     wu_response = requests.get(wu_url, params=params)
     print(f"\nWU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
 
-else:
-    print("Hiba történt a Tuya API lekérés során:", response)
+except Exception as e:
+    print("Hiba történt a futtatás során:", e)
+    exit(1)
