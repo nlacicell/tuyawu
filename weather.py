@@ -33,32 +33,52 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. ADATLEKÉRÉS A TUYA-BÓL ---
-def get_tuya_status(token):
+# --- 3. SPECIÁLIS IDŐJÁRÁS-ADAT LEKÉRÉS A TUYA-BÓL ---
+def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
-    url_path = f"/v1.0/devices/{DEVICE_ID}/specifications"
-    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    
-    headers = {
-        "client_id": ACCESS_ID,
-        "access_token": token,
-        "sign": sign,
-        "t": t,
-        "sign_method": "HMAC-SHA256"
-    }
-    
-    res = requests.get(f"{BASE_URL}{url_path}", headers={"client_id": ACCESS_ID, "access_token": token, "sign": sign, "t": t, "sign_method": "HMAC-SHA256"})
-    if res.status_code == 200 and res.json().get("success"):
-        return res.json()["result"]
-    raise Exception(f"Státusz hiba: {res.text}")
+    combined_data = {}
 
-try:
-    token = get_tuya_token()
-    status_list = get_tuya_status(token)
-    
-    data = {item["code"]: item["value"] for item in status_list}
-    print("Sikeres lekérés! Nyers Tuya adatok:\n", data)
+    # Biztonsági okokból mind a két lehetséges végpontot lekérdezzük hibatűrő módon
+    endpoints = [
+        f"/v1.0/devices/{DEVICE_ID}/status",
+        f"/v1.0/devices/{DEVICE_ID}/specifications"
+    ]
+
+    for path in endpoints:
+        try:
+            string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
+            sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+            
+            headers = {
+                "client_id": ACCESS_ID,
+                "access_token": token,
+                "sign": sign,
+                "t": t,
+                "sign_method": "HMAC-SHA256"
+            }
+            
+            res = requests.get(f"{BASE_URL}{path}", headers=headers)
+            if res.status_code == 200 and res.json().get("success"):
+                res_json = res.json()
+                result_obj = res_json.get("result", {})
+                
+                # Ha lista formátumban jön vissza (pl. status)
+                if isinstance(result_obj, list):
+                    for item in result_obj:
+                        if isinstance(item, dict) and "code" in item and "value" in item:
+                            combined_data[str(item["code"])] = item["value"]
+                # Ha összetett objektum formátumban jön vissza (pl. specifications)
+                elif isinstance(result_obj, dict):
+                    for sub_key in ["properties", "status", "functions"]:
+                        sub_list = result_obj.get(sub_key, [])
+                        if isinstance(sub_list, list):
+                            for item in sub_list:
+                                if isinstance(item, dict) and "code" in item and "value" in item:
+                                    combined_data[str(item["code"])] = item["value"]
+        except Exception:
+            pass # Ha az egyik végpont épp nem elérhető, megyünk a következőre
+            
+    return combined_data)
     
     # Alapértelmezett értékek biztonsági mentésként
     temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
