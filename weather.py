@@ -12,7 +12,7 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-BASE_URL = "https://tuyaeu.com"
+BASE_URL = "https://openapi.tuyaeu.com"
 
 # --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
 def get_tuya_token():
@@ -98,7 +98,7 @@ try:
     rain_in = rain_mm * 0.0393701
 
     # --- 5. FELTÖLTÉS WEATHER UNDERGROUND-RA ---
-    wu_url = "https://wunderground.com"
+    https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php
     params = {
         "ID": WU_STATION_ID,
         "PASSWORD": WU_STATION_KEY,
