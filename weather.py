@@ -13,8 +13,8 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-# 1. JÓ CÍM: A működő európai Tuya OpenAPI szervercím
-BASE_URL = "https://tuyaeu.com"
+# A működő európai Tuya OpenAPI szervercím
+BASE_URL = "https://openapi.tuyaeu.com"
 
 # --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
 def get_tuya_token():
@@ -35,12 +35,11 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. SPECIÁLIS IDŐJÁRÁS-ADAT LEKÉRÉS A NAPLÓKBÓL IS ---
+# --- 3. IDŐJÁRÁS-ADAT LEKÉRÉS A NAPLÓKBÓL ÉS ADATOKBÓL ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
 
-    # 3 különböző Tuya API végpontot kérdezünk le, beleértve a valós idejű logokat is!
     endpoints = [
         f"/v1.0/devices/{DEVICE_ID}/status",
         f"/v1.0/devices/{DEVICE_ID}/specifications",
@@ -91,6 +90,7 @@ try:
     data = get_weather_station_data(token)
     print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
     
+    # Biztonságos alapértelmezett értékek
     temp_f, humidity, wind_mph, gust_mph, wind_dir, baro_in, rain_in = 0, 0, 0, 0, 0, 30.0, 0
     
     # --- 4. A BASE64 IDŐJÁRÁS-TÖMB DEKÓDOLÁSA ---
@@ -142,12 +142,13 @@ try:
         baro_hpa = raw_baro / 10.0 if raw_baro > 5000 else raw_baro
         baro_in = baro_hpa * 0.02953
 
-    # 2. JÓ CÍM: A Weather Underground hivatalos, hosszú, működő HTTPS címe
-    wu_url = "https://wunderground.com"
+    # --- 5. JAVÍTOTT WEATHER UNDERGROUND CÍM (PWS UPLOAD PROTOCOL) ---
+    # A hivatalos és működő feltöltési API végpont
+    wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
     
     params = {
         "ID": WU_STATION_ID,
-        "PASSWORD": WU_STATION_KEY,
+        "PASSWORD": WU_STATION_KEY, # Itt a WU felületén generált Station Key-t kell használni!
         "dateutc": "now",
         "tempf": round(temp_f, 1),
         "humidity": int(humidity),
@@ -156,11 +157,18 @@ try:
         "winddir": int(wind_dir),
         "baromin": round(baro_in, 2),
         "rainin": round(rain_in, 2),
+        "softwaretype": "TuyaPythonGateway",
         "action": "updateraw"
     }
     
+    # Az adatok küldése GET kéréssel a PWS protokoll szerint
     wu_response = requests.get(wu_url, params=params)
     print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
+    
+    if "success" in wu_response.text.lower():
+        print("Az adatfeltöltés sikeres volt!")
+    else:
+        print("A WU szervere elutasította az adatokat. Ellenőrizd az ID-t és a Station Key-t.")
 
 except Exception as e:
     print("Hiba történt a futtatás során:", e)
