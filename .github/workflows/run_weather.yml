@@ -2,8 +2,8 @@ name: Update Vevor Weather Data
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Futtatás 10 percenként automatikusan
-  workflow_dispatch: # EZ AZ ÚJ SOR: Ez engedélyezi a kézi indító gombot!
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -25,10 +25,6 @@ jobs:
       env:
         TUYA_ACCESS_ID: ${{ secrets.TUYA_ACCESS_ID }}
         TUYA_ACCESS_SECRET: ${{ secrets.TUYA_ACCESS_SECRET }}
-        TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
-        WU_STATION_ID: ${{ secrets.WU_STATION_ID }}
-        WU_STATION_KEY: ${{ secrets.WU_STATION_KEY }}
-      run: python weather.py
         TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
         WU_STATION_ID: ${{ secrets.WU_STATION_ID }}
         WU_STATION_KEY: ${{ secrets.WU_STATION_KEY }}
