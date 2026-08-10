@@ -37,17 +37,23 @@ def get_tuya_token():
 # --- 3. TUYA ADATOK LEKÉRÉSE ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
+    
+    # Időbélyegek a log lekéréshez (elmúlt 10 perc adatait nézzük vissza)
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - (10 * 60 * 1000)
+    
     combined_data = {}
 
-    # Lekérjük a státuszt, a specifikációkat és az utolsó logokat is, hogy minden adat meglegyen
+    # Az utolsó végpont tartalmazza a konkrét időbélyeges log lekérést
     endpoints = [
         f"/v1.0/devices/{DEVICE_ID}/status",
         f"/v1.0/devices/{DEVICE_ID}/specifications",
-        f"/v1.0/devices/{DEVICE_ID}/logs"
+        f"/v1.0/devices/{DEVICE_ID}/logs?start_time={start_ms}&end_time={now_ms}&size=50"
     ]
 
     for path in endpoints:
         try:
+            # Tuya v1 aláírás generálása
             string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
             sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
             
@@ -64,16 +70,17 @@ def get_weather_station_data(token):
                 res_json = res.json()
                 result_obj = res_json.get("result", {})
                 
-                # Ha listát kapunk vissza (pl. status végpont)
+                # Ha listát kapunk vissza (status végpont)
                 if isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
-                # Ha szótárat kapunk vissza (pl. logs vagy specifications végpont)
+                # Ha szótárat kapunk vissza (logs vagy specifications végpont)
                 elif isinstance(result_obj, dict):
                     if "logs" in result_obj:
                         for log_item in result_obj.get("logs", []):
                             if isinstance(log_item, dict) and "code" in log_item and "value" in log_item:
+                                # A legfrissebb log érték felülírja a régit
                                 combined_data[str(log_item["code"])] = log_item["value"]
                     
                     for sub_key in ["properties", "status", "functions"]:
@@ -92,10 +99,9 @@ try:
     data = get_weather_station_data(token)
     print("Sikeres lekérés! Egyesített Tuya adatbázis:\n", data)
     
-    # --- 4. ADATOK FELDOLGOZÁSA A LOGOK alapján ---
+    # --- 4. ADATOK FELDOLGOZÁSA ---
     
-    # Külső hőmérséklet lekérése (Megpróbálja a tipikus neveket, ha nincs meg, 0)
-    # Ha a Tuya tizedesjegy nélkül küldi (pl. 235 = 23.5°C), akkor leosztjuk 10-zel
+    # Külső hőmérséklet (Ha a logban outdoor_temp vagy va_temperature van)
     temp_c = data.get("outdoor_temp", data.get("temp_outdoor", data.get("va_temperature", 0)))
     try:
         temp_c = float(temp_c)
@@ -105,36 +111,35 @@ try:
         temp_c = 0.0
     temp_f = (temp_c * 9/5) + 32
     
-    # Külső páratartalom (A logodban pontosan 'outdoor humidity' névvel szerepel)
+    # Külső páratartalom
     humidity = data.get("outdoor humidity", data.get("humidity_outdoor", 0))
     try:
         humidity = int(float(humidity))
     except (ValueError, TypeError):
         humidity = 0
 
-    # Szélsebesség (A logodban: 'wind_speed' kmph-ban) -> Átváltás mph-ba
+    # Szélsebesség (km/h -> mph)
     wind_kmh = data.get("wind_speed", 0)
     try:
         wind_mph = float(wind_kmh) * 0.621371
     except (ValueError, TypeError):
         wind_mph = 0.0
 
-    # Széllökés (A logodban: 'Wind Gust' kmph-ban) -> Átváltás mph-ba
+    # Széllökés (km/h -> mph)
     gust_kmh = data.get("Wind Gust", 0)
     try:
         gust_mph = float(gust_kmh) * 0.621371
     except (ValueError, TypeError):
         gust_mph = 0.0
 
-    # Szélirány (Megpróbálja a leggyakoribb Tuya kódokat)
+    # Szélirány (0-360 fok)
     wind_dir = data.get("wind_dir", data.get("Wind Direction", data.get("va_direction", 0)))
     try:
         wind_dir = int(float(wind_dir))
     except (ValueError, TypeError):
         wind_dir = 0
 
-    # Légnyomás (A logodban: 'indoor_pressure' hPa-ban) -> Átváltás inHg-ba
-    # Ha a Tuya tizedesjegy nélkül adja meg (pl. 99760 = 997.6 hPa), leosztjuk 100-zal vagy 10-zel
+    # Légnyomás (hPa -> inHg)
     baro_hpa = data.get("indoor_pressure", data.get("pressure_current", 1013.2))
     try:
         baro_hpa = float(baro_hpa)
@@ -146,7 +151,7 @@ try:
         baro_hpa = 1013.2
     baro_in = baro_hpa * 0.02953
 
-    # Csapadék (A logodban: 'rainfall' mm-ben) -> Átváltás inch-be
+    # Csapadék (mm -> inch)
     rain_mm = data.get("rainfall", 0)
     try:
         rain_in = float(rain_mm) * 0.0393701
@@ -155,9 +160,8 @@ try:
 
     print(f"Feldolgozott értékek -> Temp: {round(temp_c,1)}°C ({round(temp_f,1)}°F), Pára: {humidity}%, Szél: {round(wind_mph,1)} mph, Nyomás: {round(baro_in,2)} inHg")
 
-    # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND PWS PROTOKOLLON ---
-    # Ez a hivatalos, működő backend API címe a szenzoradatok fogadására
-    wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
+    # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND-RA ---
+    wu_url = "https://wunderground.com"
     
     params = {
         "ID": WU_STATION_ID,
@@ -174,7 +178,6 @@ try:
         "action": "updateraw"
     }
     
-    # Adatküldés
     wu_response = requests.get(wu_url, params=params)
     print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
     
