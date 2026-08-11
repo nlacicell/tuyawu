@@ -10,7 +10,7 @@ WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 def get_tuya_weather_data():
-    """Lekéri az adatokat a Tuya Cloud eszközlistájából (get_devices)."""
+    """Lekéri az adatokat a Tuya Cloud eszközlistájából (getdevices)."""
     print("Kapcsolódás a Tuya Cloud API-hoz tinytuya-val...")
     
     cloud = tinytuya.Cloud(
@@ -22,8 +22,8 @@ def get_tuya_weather_data():
     data = {}
     
     try:
-        # A fiók összes eszközének lekérdezése a teljes státuszlistával együtt
-        devices = cloud.get_devices()
+        # Helyes metódusnév: getdevices() aláhúzás nélkül
+        devices = cloud.getdevices()
         print(f"Lekért eszközök száma: {len(devices) if isinstance(devices, list) else 'Nem lista'}")
         
         if isinstance(devices, list):
@@ -31,7 +31,7 @@ def get_tuya_weather_data():
                 if isinstance(dev, dict) and dev.get("id") == TUYA_DEVICE_ID:
                     print(f"Megtalált céleszköz a listában: {dev.get('name')}")
                     dev_status = dev.get("status", [])
-                    print(f"Eszköz státusz tömb a get_devices()-ből: {dev_status}")
+                    print(f"Eszköz státusz tömb a getdevices()-ből: {dev_status}")
                     
                     if isinstance(dev_status, list):
                         for item in dev_status:
@@ -44,7 +44,7 @@ def get_tuya_weather_data():
                         for k, v in dev_status.items():
                             data[k] = v
     except Exception as e:
-        print(f"Hiba a get_devices() lekérdezésekor: {e}")
+        print(f"Hiba a getdevices() lekérdezésekor: {e}")
 
     return data
 
@@ -94,7 +94,7 @@ def parse_sensor_data(raw_data):
         'tempf': f"{temperature_f:.1f}",
         'humidity': humidity,
         'barom': f"{pressure_inhg:.2f}",
-        'software': 'PythonTinyTuyaWeatherScript 1.6'
+        'software': 'PythonTinyTuyaWeatherScript 1.7'
     }
     return parsed
 
