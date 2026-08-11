@@ -33,61 +33,61 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (TÖBB VÉGPONT PRÓBÁLÁSA) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (ALESZKÖZÖK FELTÉRKÉPEZÉSÉVEL) ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
+    
+    # Először lekérjük az összes aleszközt, ami ehhez a gateway-hez/konzolhoz tartozik
+    sub_devices_path = f"/v1.0/devices/{DEVICE_ID}/sub-devices"
+    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{sub_devices_path}"
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    
+    headers = {
+        "client_id": ACCESS_ID,
+        "access_token": token,
+        "sign": sign,
+        "t": t,
+        "sign_method": "HMAC-SHA256"
+    }
+    
+    target_ids = [DEVICE_ID] # Alapból a fő eszközt vizsgáljuk
+    
+    try:
+        res = requests.get(f"{BASE_URL}{sub_devices_path}", headers=headers)
+        if res.status_code == 200 and res.json().get("success"):
+            sub_list = res.json().get("result", [])
+            print(f"Talalt aleszozok listaja: {sub_list}")
+            for sub in sub_list:
+                if isinstance(sub, dict) and "id" in sub:
+                    target_ids.append(sub["id"])
+    except Exception as e:
+        print(f"Nem sikerult az aleszkozok lekerdezese: {e}")
 
-    endpoints = [
-        f"/v2.0/cloud/thing/{DEVICE_ID}/shadow",
-        f"/v1.0/devices/{DEVICE_ID}/properties",
-        f"/v1.0/devices/{DEVICE_ID}/status"
-    ]
-
-    for path in endpoints:
+    # Végigmegyünk a fő eszközön és az összes talált aleszközön
+    for current_id in target_ids:
+        path = f"/v1.0/devices/{current_id}/status"
+        t = str(int(time.time() * 1000))
+        
         try:
             string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
             sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
             
-            headers = {
-                "client_id": ACCESS_ID,
-                "access_token": token,
-                "sign": sign,
-                "t": t,
-                "sign_method": "HMAC-SHA256"
-            }
+            headers["sign"] = sign
+            headers["t"] = t
             
             res = requests.get(f"{BASE_URL}{path}", headers=headers)
             if res.status_code == 200 and res.json().get("success"):
                 res_json = res.json()
-                print(f"Sikeres valasz a vegpointrol [{path}]:", res_json)
+                print(f"Sikeres valasz az eszkoztol [{current_id}]:", res_json)
                 
-                result_obj = res_json.get("result", {})
-                
-                # Shadow struktúra kezelése
-                if isinstance(result_obj, dict) and "properties" in result_obj:
-                    props = result_obj.get("properties", [])
-                    if isinstance(props, list):
-                        for item in props:
-                            if isinstance(item, dict) and "code" in item and "value" in item:
-                                combined_data[str(item["code"])] = item["value"]
-                                
-                # Lista struktúra kezelése (status, properties)
-                elif isinstance(result_obj, list):
+                result_obj = res_json.get("result", [])
+                if isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
-                            
-                # Egyéb szótár struktúra kezelése
-                elif isinstance(result_obj, dict):
-                    for sub_key in ["properties", "status"]:
-                        sub_list = result_obj.get(sub_key, [])
-                        if isinstance(sub_list, list):
-                            for item in sub_list:
-                                if isinstance(item, dict) and "code" in item and "value" in item:
-                                    combined_data[str(item["code"])] = item["value"]
         except Exception as e:
-            print(f"Hiba a vegpontnal [{path}]: {e}")
+            print(f"Hiba a(z) {current_id} eszkoz statusz lekeresinel: {e}")
 
     return combined_data
 
@@ -97,7 +97,7 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("Nem erkezett adat az eszkozbol.")
+        print("Nem erkezett adat az eszkozökbol.")
         exit(1)
 
     print("Egyesitett Tuya adatbazis sikeresen felepult.")
@@ -196,7 +196,7 @@ try:
     if "success" in wu_response.text.lower():
         print("Az adatfeltoltes sikeresen befejezodott!")
     else:
-        print("Figyelem: A WU szervere valaszolt, de nem igazolta vissza a sikeres mentest.")
+        print("Figyelem: A WU szervere valaszolt, de nem igazolta vissza a sikeres mentést.")
 
 except Exception as e:
     print("Hiba tortent a futtatas soran:", e)
