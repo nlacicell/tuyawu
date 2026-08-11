@@ -33,50 +33,54 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL - 24 ÓRÁS ABLAK) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL - TÖBB TÍPUSSAL) ---
 def get_weather_station_data(token):
     combined_data = {}
     
     now_ms = int(time.time() * 1000)
-    # Kitoljuk az időablakot 24 órára, hogy biztosan találjunk adatot
-    start_ms = now_ms - (24 * 60 * 60 * 1000) 
-
-    # KULCSFONTOSSÁGÚ: A query paramétereket szigorúan ABC sorrendben kell megadni az aláíráshoz!
-    # end_time, size, start_time (a type szűrőt kivettük)
-    query_string = f"end_time={now_ms}&size=100&start_time={start_ms}"
-    path = f"/v1.0/devices/{DEVICE_ID}/logs"
-    path_with_query = f"{path}?{query_string}"
-
-    t = str(int(time.time() * 1000))
-    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path_with_query}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    start_ms = now_ms - (24 * 60 * 60 * 1000) # 24 órás ablak
     
-    headers = {
-        "client_id": ACCESS_ID,
-        "access_token": token,
-        "sign": sign,
-        "t": t,
-        "sign_method": "HMAC-SHA256"
-    }
+    # Különböző log típusok lekérdezése (2: DP report/szenzor, 7: Standard report, 1: Online status)
+    log_types_to_try = ["2", "7", "1"]
     
-    try:
-        res = requests.get(f"{BASE_URL}{path_with_query}", headers=headers)
-        if res.status_code == 200 and res.json().get("success"):
-            res_json = res.json()
-            logs = res_json.get("result", {}).get("logs", [])
-            print(f"Sikeres log lekeres. Talalt adatsorok szama az elmult 24 oraban: {len(logs)}")
-            
-            # A logok listája időrendben jön. Végigmegyünk rajta (fordítva, hogy a legújabb felülírja a régit)
-            for log_item in reversed(logs):
-                code = log_item.get("code")
-                value = log_item.get("value")
-                if code and value is not None:
-                    combined_data[str(code)] = value
-                    print(f"--> Szenzor adat rögzítve: {code} = {value}")
-        else:
-            print(f"Hiba a log lekeresnel: {res.text}")
-    except Exception as e:
-        print(f"Kivetel a log lekeresesekor: {e}")
+    for log_type in log_types_to_try:
+        print(f"\n--- Probalkozas type={log_type} logokkal ---")
+        
+        # Szigorú ABC sorrend: end_time, size, start_time, type
+        query_string = f"end_time={now_ms}&size=100&start_time={start_ms}&type={log_type}"
+        path = f"/v1.0/devices/{DEVICE_ID}/logs"
+        path_with_query = f"{path}?{query_string}"
+
+        t = str(int(time.time() * 1000))
+        string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path_with_query}"
+        sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+        
+        headers = {
+            "client_id": ACCESS_ID,
+            "access_token": token,
+            "sign": sign,
+            "t": t,
+            "sign_method": "HMAC-SHA256"
+        }
+        
+        try:
+            res = requests.get(f"{BASE_URL}{path_with_query}", headers=headers)
+            if res.status_code == 200 and res.json().get("success"):
+                res_json = res.json()
+                logs = res_json.get("result", {}).get("logs", [])
+                print(f"Sikeres lekeres. Talalt adatsorok (type={log_type}): {len(logs)}")
+                
+                # A logok listája időrendben jön. Fordítva megyünk, hogy a legújabb érvényesüljön
+                for log_item in reversed(logs):
+                    code = log_item.get("code")
+                    value = log_item.get("value")
+                    if code and value is not None:
+                        combined_data[str(code)] = value
+                        print(f"--> Szenzor adat rögzítve: {code} = {value}")
+            else:
+                print(f"Hiba a log lekeresnel (type={log_type}): {res.text}")
+        except Exception as e:
+            print(f"Kivetel a log lekeresesekor (type={log_type}): {e}")
 
     return combined_data
 
@@ -86,10 +90,10 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("Nem érkezett érdemi adat (log) az eszközből az elmúlt 24 órában sem.")
+        print("\nNem érkezett érdemi szenzor adat (log) az eszközből az elmúlt 24 órában.")
         exit(1)
 
-    print("Egyesitett Tuya adatbazis sikeresen felepult a logokbol.")
+    print("\nEgyesitett Tuya adatbazis sikeresen felepult a logokbol.")
 
     # --- 4. ADATOK FELDOLGOZÁSA ---
     
