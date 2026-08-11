@@ -3,11 +3,10 @@ import sys
 import json
 import tinytuya
 
-
 TUYA_ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
 TUYA_ACCESS_SECRET = os.environ.get("TUYA_ACCESS_SECRET")
 TUYA_DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
-TUYA_REGION = os.environ.get("TUYA_REGION", "eu")
+TUYA_REGION = "eu"
 
 
 def check_environment():
@@ -27,13 +26,27 @@ def create_cloud():
     print("=" * 70)
     print("YT60307 TUYA DIAGNOSZTIKA")
     print("=" * 70)
-    print(f"Régió: {TUYA_REGION}")
+    print("Régió: eu")
     print(f"Device ID: {TUYA_DEVICE_ID}")
     return tinytuya.Cloud(
-        apiRegion=TUYA_REGION,
+        apiRegion="eu",
         apiKey=TUYA_ACCESS_ID,
         apiSecret=TUYA_ACCESS_SECRET,
     )
+
+
+def get_status(cloud):
+    print()
+    print("=" * 70)
+    print("1. GETSTATUS")
+    print("=" * 70)
+    try:
+        response = cloud.getstatus(TUYA_DEVICE_ID)
+        print(json.dumps(response, ensure_ascii=False, indent=2))
+        return response
+    except Exception as exc:
+        print(f"HIBA: {exc}")
+        return None
 
 
 def request(cloud, label, endpoint):
@@ -44,20 +57,6 @@ def request(cloud, label, endpoint):
     print(f"Endpoint: {endpoint}")
     try:
         response = cloud.cloudrequest(endpoint)
-        print(json.dumps(response, ensure_ascii=False, indent=2))
-        return response
-    except Exception as exc:
-        print(f"HIBA: {exc}")
-        return None
-
-
-def get_status(cloud):
-    print()
-    print("=" * 70)
-    print("1. GETSTATUS")
-    print("=" * 70)
-    try:
-        response = cloud.getstatus(TUYA_DEVICE_ID)
         print(json.dumps(response, ensure_ascii=False, indent=2))
         return response
     except Exception as exc:
@@ -78,9 +77,12 @@ def search_recursive(obj, path="root"):
                 print(">>> LEHETSÉGES SZÉLIRÁNY / SZÉL ADAT <<<")
                 print(f"PATH: {current}")
                 print(f"KEY: {key}")
-                print(json.dumps(
-                    value, ensure_ascii=False, indent=2
-                ) if isinstance(value, (dict, list)) else f"VALUE: {value!r}")
+                if isinstance(value, (dict, list)):
+                    print(json.dumps(
+                        value, ensure_ascii=False, indent=2
+                    ))
+                else:
+                    print(f"VALUE: {value!r}")
 
             if key_text in (
                 "dp_id", "dpid", "dp", "code",
@@ -115,13 +117,11 @@ def main():
     }
 
     for label, endpoint in endpoints.items():
-        results[label] = request(
-            cloud, label, endpoint
-        )
+        results[label] = request(cloud, label, endpoint)
 
     print()
     print("=" * 70)
-    print("SZÉLIRÁNY / WIND KERESÉS AZ ÖSSZES VÁLASZBAN")
+    print("SZÉLIRÁNY / WIND KERESÉS")
     print("=" * 70)
 
     for label, data in results.items():
@@ -135,8 +135,6 @@ def main():
     print("=" * 70)
     print("DIAGNOSZTIKA VÉGE")
     print("=" * 70)
-    print("A GitHub Actions log teljes tartalmát másold be ide.")
-    print("A Tuya Secret értékeket ne másold be.")
 
 
 if __name__ == "__main__":
