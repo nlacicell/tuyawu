@@ -38,7 +38,6 @@ def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
 
-    # 1. Megpróbáljuk a Shadow (eszköz reális állapota) végpontot, 2. A Properties-t, 3. A Status-t
     endpoints = [
         f"/v2.0/cloud/thing/{DEVICE_ID}/shadow",
         f"/v1.0/devices/{DEVICE_ID}/properties",
@@ -61,11 +60,11 @@ def get_weather_station_data(token):
             res = requests.get(f"{BASE_URL}{path}", headers=headers)
             if res.status_code == 200 and res.json().get("success"):
                 res_json = res.json()
-                print(f"Sikeres válasz a végpontról [{path}]:", res_json)
+                print(f"Sikeres valasz a vegpointrol [{path}]:", res_json)
                 
                 result_obj = res_json.get("result", {})
                 
-                # Ha Shadow struktúrát kapunk vissza (v2.0 API)
+                # Shadow struktúra kezelése
                 if isinstance(result_obj, dict) and "properties" in result_obj:
                     props = result_obj.get("properties", [])
                     if isinstance(props, list):
@@ -73,13 +72,13 @@ def get_weather_station_data(token):
                             if isinstance(item, dict) and "code" in item and "value" in item:
                                 combined_data[str(item["code"])] = item["value"]
                                 
-                # Ha sima tömböt kapunk (v1.0 status/properties)
+                # Lista struktúra kezelése (status, properties)
                 elif isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
                             
-                # Ha más szótár struktúrát kapunk
+                # Egyéb szótár struktúra kezelése
                 elif isinstance(result_obj, dict):
                     for sub_key in ["properties", "status"]:
                         sub_list = result_obj.get(sub_key, [])
@@ -88,34 +87,43 @@ def get_weather_station_data(token):
                                 if isinstance(item, dict) and "code" in item and "value" in item:
                                     combined_data[str(item["code"])] = item["value"]
         except Exception as e:
-            print(f"Hiba a végpontnál [{path}]:", e)
+            print(f"Hiba a vegpontnal [{path}]: {e}")
 
     return combined_data
 
-    # --- 4. ADATOK FELDOLGOZÁSA (SZABVÁNYOS TUYA KÓDOKRA JAVÍTVA) ---
+# --- FŐ PROGRAMFUTTATÁS ---
+try:
+    token = get_tuya_token()
+    data = get_weather_station_data(token)
     
-    # 1. Hőmérséklet (va_temperature, temp_outdoor vagy outdoor_temp)
+    if not data:
+        print("Nem erkezett adat az eszkozbol.")
+        exit(1)
+
+    print("Egyesitett Tuya adatbazis sikeresen felepult.")
+
+    # --- 4. ADATOK FELDOLGOZÁSA ---
+    
+    # 1. Hőmérséklet
     temp_c = data.get("va_temperature", data.get("temp_outdoor", data.get("outdoor_temp", 0)))
     try:
         temp_c = float(temp_c)
-        # Ha a Tuya tizedesjegy nélkül küldi (pl. 235 a 23.5 helyett)
         if temp_c > 80 or temp_c < -40:
             temp_c = temp_c / 10.0
     except (ValueError, TypeError):
         temp_c = 0.0
     temp_f = (temp_c * 9/5) + 32
     
-    # 2. Külső páratartalom (humidity, va_humidity vagy humidity_outdoor)
+    # 2. Külső páratartalom
     humidity = data.get("humidity", data.get("va_humidity", data.get("humidity_outdoor", 0)))
     try:
         humidity = int(float(humidity))
     except (ValueError, TypeError):
         humidity = 0
 
-    # 3. Szélsebesség (wind_speed vagy va_wind_speed)
+    # 3. Szélsebesség
     wind_kmh = data.get("wind_speed", data.get("va_wind_speed", 0))
     try:
-        # Ha a Tuya itt is 10-es szorzót használ (pl. 15 km/h-t 150-nek küld)
         wind_kmh = float(wind_kmh)
         if wind_kmh > 200: 
             wind_kmh = wind_kmh / 10.0
@@ -123,7 +131,7 @@ def get_weather_station_data(token):
     except (ValueError, TypeError):
         wind_mph = 0.0
 
-    # 4. Széllökés (wind_gust vagy va_gust)
+    # 4. Széllökés
     gust_kmh = data.get("wind_gust", data.get("va_gust", 0))
     try:
         gust_kmh = float(gust_kmh)
@@ -133,14 +141,14 @@ def get_weather_station_data(token):
     except (ValueError, TypeError):
         gust_mph = 0.0
 
-    # 5. Szélirány (va_direction vagy wind_direction)
+    # 5. Szélirány
     wind_dir = data.get("va_direction", data.get("wind_direction", 0))
     try:
         wind_dir = int(float(wind_dir))
     except (ValueError, TypeError):
         wind_dir = 0
 
-    # 6. Légnyomás (pressure_current vagy atmosphere)
+    # 6. Légnyomás
     baro_hpa = data.get("pressure_current", data.get("atmosphere", data.get("indoor_pressure", 1013.2)))
     try:
         baro_hpa = float(baro_hpa)
@@ -152,7 +160,7 @@ def get_weather_station_data(token):
         baro_hpa = 1013.2
     baro_in = baro_hpa * 0.02953
 
-    # 7. Csapadék (rain_24h, rainfall vagy va_rain)
+    # 7. Csapadék
     rain_mm = data.get("rain_24h", data.get("rainfall", data.get("va_rain", 0)))
     try:
         rain_mm = float(rain_mm)
@@ -162,10 +170,9 @@ def get_weather_station_data(token):
     except (ValueError, TypeError):
         rain_in = 0.0
 
-    print(f"Feldolgozott értékek -> Temp: {round(temp_c,1)}°C, Pára: {humidity}%, Szél: {round(wind_mph,1)} mph, Irány: {wind_dir}°, Nyomás: {round(baro_in,2)} inHg")
+    print(f"Feldolgozott ertekek -> Temp: {round(temp_c,1)}C, Para: {humidity}%, Szel: {round(wind_mph,1)} mph, Irany: {wind_dir}, Nyomas: {round(baro_in,2)} inHg")
 
     # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND-RA ---
-    # JAVÍTÁS: A bázis URL-nek a valós feltöltési végpontot kell megadni!
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
     
     params = {
@@ -184,17 +191,13 @@ def get_weather_station_data(token):
     }
     
     wu_response = requests.get(wu_url, params=params)
-    print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
+    print(f"WU Valaszkod: {wu_response.status_code} - Uzenet: {wu_response.text}")
     
     if "success" in wu_response.text.lower():
-        print("Az adatfeltöltés sikeresen befejeződött!")
+        print("Az adatfeltoltes sikeresen befejezodott!")
     else:
-        print("Figyelem: A WU szervere válaszolt, de nem igazolta vissza a sikeres mentést.")
+        print("Figyelem: A WU szervere valaszolt, de nem igazolta vissza a sikeres mentest.")
 
 except Exception as e:
-    print("Hiba történt a futtatás során:", e)
-    exit(1)
-
-except Exception as e:
-    print("Hiba történt a futtatás során:", e)
+    print("Hiba tortent a futtatas soran:", e)
     exit(1)
