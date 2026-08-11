@@ -33,61 +33,60 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (ALESZKÖZÖK FELTÉRKÉPEZÉSÉVEL) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (SPECIFIKÁCIÓ ÉS STÁTUSZ) ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
     combined_data = {}
     
-    # Először lekérjük az összes aleszközt, ami ehhez a gateway-hez/konzolhoz tartozik
-    sub_devices_path = f"/v1.0/devices/{DEVICE_ID}/sub-devices"
-    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{sub_devices_path}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+    # Két fő végpontot kérdezünk le: a státuszt és a részletes specifikációt
+    endpoints = [
+        f"/v1.0/devices/{DEVICE_ID}/status",
+        f"/v1.0/devices/{DEVICE_ID}/specifications"
+    ]
     
     headers = {
         "client_id": ACCESS_ID,
         "access_token": token,
-        "sign": sign,
-        "t": t,
         "sign_method": "HMAC-SHA256"
     }
-    
-    target_ids = [DEVICE_ID] # Alapból a fő eszközt vizsgáljuk
-    
-    try:
-        res = requests.get(f"{BASE_URL}{sub_devices_path}", headers=headers)
-        if res.status_code == 200 and res.json().get("success"):
-            sub_list = res.json().get("result", [])
-            print(f"Talalt aleszozok listaja: {sub_list}")
-            for sub in sub_list:
-                if isinstance(sub, dict) and "id" in sub:
-                    target_ids.append(sub["id"])
-    except Exception as e:
-        print(f"Nem sikerult az aleszkozok lekerdezese: {e}")
 
-    # Végigmegyünk a fő eszközön és az összes talált aleszközön
-    for current_id in target_ids:
-        path = f"/v1.0/devices/{current_id}/status"
+    for path in endpoints:
         t = str(int(time.time() * 1000))
+        string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
+        sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+        
+        headers["sign"] = sign
+        headers["t"] = t
         
         try:
-            string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
-            sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-            
-            headers["sign"] = sign
-            headers["t"] = t
-            
             res = requests.get(f"{BASE_URL}{path}", headers=headers)
             if res.status_code == 200 and res.json().get("success"):
                 res_json = res.json()
-                print(f"Sikeres valasz az eszkoztol [{current_id}]:", res_json)
+                print(f"Sikeres valasz innen [{path}]:", res_json)
                 
-                result_obj = res_json.get("result", [])
+                result_obj = res_json.get("result", {})
+                
+                # Ha sima lista (mint a status végpontnál)
                 if isinstance(result_obj, list):
                     for item in result_obj:
                         if isinstance(item, dict) and "code" in item and "value" in item:
                             combined_data[str(item["code"])] = item["value"]
+                            
+                # Ha szótár struktúra (mint a specifications végpontnál)
+                elif isinstance(result_obj, dict):
+                    # Végigmegyünk a specifikáció lehetséges adathelyein
+                    for sub_key in ["functions", "status", "properties"]:
+                        sub_list = result_obj.get(sub_key, [])
+                        if isinstance(sub_list, list):
+                            for item in sub_list:
+                                if isinstance(item, dict) and "code" in item:
+                                    # Ha van fix "value", elmentjük, ha nincs, megnézzük a típust
+                                    val = item.get("value")
+                                    combined_data[str(item["code"])] = val
+            else:
+                print(f"Sikertelen keres a vegponton [{path}]: {res.text}")
         except Exception as e:
-            print(f"Hiba a(z) {current_id} eszkoz statusz lekeresinel: {e}")
+            print(f"Hiba történt a(z) {path} lekeresekor: {e}")
 
     return combined_data
 
@@ -97,61 +96,55 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("Nem erkezett adat az eszkozökbol.")
+        print("Nem erkezett adat az eszkozbol.")
         exit(1)
 
     print("Egyesitett Tuya adatbazis sikeresen felepult.")
 
     # --- 4. ADATOK FELDOLGOZÁSA ---
-    
-    # 1. Hőmérséklet
+    # Ideiglenes fallback értékek, ha még nem látjuk a pontos kulcsot
     temp_c = data.get("va_temperature", data.get("temp_outdoor", data.get("outdoor_temp", 0)))
     try:
-        temp_c = float(temp_c)
+        temp_c = float(temp_c) if temp_c is not None else 0.0
         if temp_c > 80 or temp_c < -40:
             temp_c = temp_c / 10.0
     except (ValueError, TypeError):
         temp_c = 0.0
     temp_f = (temp_c * 9/5) + 32
     
-    # 2. Külső páratartalom
     humidity = data.get("humidity", data.get("va_humidity", data.get("humidity_outdoor", 0)))
     try:
-        humidity = int(float(humidity))
+        humidity = int(float(humidity)) if humidity is not None else 0
     except (ValueError, TypeError):
         humidity = 0
 
-    # 3. Szélsebesség
     wind_kmh = data.get("wind_speed", data.get("va_wind_speed", 0))
     try:
-        wind_kmh = float(wind_kmh)
+        wind_kmh = float(wind_kmh) if wind_kmh is not None else 0.0
         if wind_kmh > 200: 
             wind_kmh = wind_kmh / 10.0
         wind_mph = wind_kmh * 0.621371
     except (ValueError, TypeError):
         wind_mph = 0.0
 
-    # 4. Széllökés
     gust_kmh = data.get("wind_gust", data.get("va_gust", 0))
     try:
-        gust_kmh = float(gust_kmh)
+        gust_kmh = float(gust_kmh) if gust_kmh is not None else 0.0
         if gust_kmh > 200:
             gust_kmh = gust_kmh / 10.0
         gust_mph = gust_kmh * 0.621371
     except (ValueError, TypeError):
         gust_mph = 0.0
 
-    # 5. Szélirány
     wind_dir = data.get("va_direction", data.get("wind_direction", 0))
     try:
-        wind_dir = int(float(wind_dir))
+        wind_dir = int(float(wind_dir)) if wind_dir is not None else 0
     except (ValueError, TypeError):
         wind_dir = 0
 
-    # 6. Légnyomás
     baro_hpa = data.get("pressure_current", data.get("atmosphere", data.get("indoor_pressure", 1013.2)))
     try:
-        baro_hpa = float(baro_hpa)
+        baro_hpa = float(baro_hpa) if baro_hpa is not None else 1013.2
         if baro_hpa > 5000:
             baro_hpa = baro_hpa / 100.0
         elif baro_hpa > 2000:
@@ -160,10 +153,9 @@ try:
         baro_hpa = 1013.2
     baro_in = baro_hpa * 0.02953
 
-    # 7. Csapadék
     rain_mm = data.get("rain_24h", data.get("rainfall", data.get("va_rain", 0)))
     try:
-        rain_mm = float(rain_mm)
+        rain_mm = float(rain_mm) if rain_mm is not None else 0.0
         if rain_mm > 500:
             rain_mm = rain_mm / 10.0
         rain_in = rain_mm * 0.0393701
