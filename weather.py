@@ -1,11 +1,12 @@
 import os
 import sys
+import json
 import requests
 import tinytuya
 
 
 # ============================================================
-# TUYA
+# TUYA BEÁLLÍTÁSOK
 # ============================================================
 
 TUYA_ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
@@ -23,28 +24,7 @@ WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 
 # ============================================================
-# A TE IDŐJÁRÁSÁLLOMÁSOD TUYA DP-KÓDJAI
-# ============================================================
-
-OUTDOOR_TEMPERATURE = "outdoor_temperature"
-OUTDOOR_HUMIDITY = "outdoor_humidity"
-
-INDOOR_TEMPERATURE = "indoor_temperature"
-INDOOR_HUMIDITY = "indoor_humidity"
-
-PRESSURE = "indoor_pressure"
-
-WIND_SPEED = "wind_speed"
-WIND_GUST = "wind_gust"
-
-RAIN = "rainfall"
-
-UV_INDEX = "uvi"
-LIGHT_INTENSITY = "light_intensity"
-
-
-# ============================================================
-# KÖRNYEZETI VÁLTOZÓK ELLENŐRZÉSE
+# KÖRNYEZET ELLENŐRZÉSE
 # ============================================================
 
 def check_environment():
@@ -76,10 +56,10 @@ def check_environment():
 # TUYA CLOUD
 # ============================================================
 
-def create_tuya_cloud():
+def create_cloud():
 
     print(
-        f"Tuya régió: {TUYA_REGION}"
+        f"Tuya Cloud régió: {TUYA_REGION}"
     )
 
     return tinytuya.Cloud(
@@ -90,18 +70,22 @@ def create_tuya_cloud():
 
 
 # ============================================================
-# TUYA STATUS LEKÉRÉSE
+# HAGYOMÁNYOS TUYA STATUS
+#
+# Ez nálad jelenleg csak a beállításokat adja vissza.
+# EZT NEM használjuk az időjárási méréshez.
 # ============================================================
 
-def get_tuya_status(cloud):
+def get_status(cloud):
+
+    endpoint = (
+        f"/v1.0/iot-03/devices/"
+        f"{TUYA_DEVICE_ID}/status"
+    )
 
     print()
-    print("=" * 60)
-    print("TUYA ADATOK LEKÉRÉSE")
-    print("=" * 60)
-
     print(
-        "Tuya státusz lekérése..."
+        f"Tuya státusz lekérése: {endpoint}"
     )
 
     response = cloud.getstatus(
@@ -117,7 +101,7 @@ def get_tuya_status(cloud):
     if response.get("success") is False:
 
         raise RuntimeError(
-            "Tuya API hiba: "
+            f"Tuya hiba: "
             f"{response.get('code')} "
             f"{response.get('msg')}"
         )
@@ -146,7 +130,7 @@ def get_tuya_status(cloud):
 
     print()
     print(
-        f"Tuya DP-k száma: {len(status)}"
+        f"Tuya státusz DP-k: {len(status)}"
     )
 
     print("-" * 60)
@@ -163,10 +147,148 @@ def get_tuya_status(cloud):
 
 
 # ============================================================
-# ÉRTÉK ÁTALAKÍTÁSA SZÁMMÁ
+# SHADOW PROPERTIES
+#
+# EZ A FONTOS LEKÉRDEZÉS!
+#
+# /v2.0/cloud/thing/{device_id}/shadow/properties
+#
+# A Tuya dokumentáció szerint itt vannak a készülék által
+# a cloudba jelentett aktuális property-k.
 # ============================================================
 
-def to_float(value):
+def get_shadow_properties(cloud):
+
+    endpoint = (
+        f"/v2.0/cloud/thing/"
+        f"{TUYA_DEVICE_ID}/shadow/properties"
+    )
+
+    print()
+    print("=" * 60)
+    print("TUYA SHADOW PROPERTIES")
+    print("=" * 60)
+
+    print(
+        f"Lekérés: {endpoint}"
+    )
+
+    try:
+
+        response = cloud.cloudrequest(
+            endpoint
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "A Shadow Properties lekérése "
+            f"hibát adott: {exc}"
+        )
+
+
+    print()
+    print("Tuya Shadow nyers válasz:")
+
+    print(
+        json.dumps(
+            response,
+            ensure_ascii=False,
+            indent=2
+        )
+    )
+
+
+    if not isinstance(response, dict):
+
+        raise RuntimeError(
+            "A Shadow válasz nem dictionary."
+        )
+
+
+    if response.get("success") is False:
+
+        raise RuntimeError(
+            f"Shadow API hiba: "
+            f"{response.get('code')} "
+            f"{response.get('msg')}"
+        )
+
+
+    result = response.get(
+        "result",
+        {}
+    )
+
+    properties = []
+
+    if isinstance(result, dict):
+
+        properties = result.get(
+            "properties",
+            []
+        )
+
+
+    shadow = {}
+
+
+    if isinstance(properties, list):
+
+        for item in properties:
+
+            if not isinstance(item, dict):
+                continue
+
+            code = item.get("code")
+
+            if not code:
+                continue
+
+            shadow[str(code)] = {
+                "value": item.get("value"),
+                "dp_id": item.get(
+                    "dp_id",
+                    item.get("dpId")
+                ),
+                "time": item.get(
+                    "time"
+                ),
+                "custom_name": item.get(
+                    "custom_name",
+                    ""
+                ),
+            }
+
+
+    print()
+    print(
+        f"Shadow property-k száma: "
+        f"{len(shadow)}"
+    )
+
+    print("-" * 60)
+
+    for code, data in shadow.items():
+
+        print(
+            f"{code}: "
+            f"value={data['value']!r}, "
+            f"dp={data['dp_id']!r}, "
+            f"time={data['time']!r}, "
+            f"name={data['custom_name']!r}"
+        )
+
+    print("-" * 60)
+
+    return shadow
+
+
+# ============================================================
+# SZÁM KONVERTÁLÁSA
+# ============================================================
+
+def number(value):
 
     try:
 
@@ -181,368 +303,672 @@ def to_float(value):
 
 
 # ============================================================
-# KÜLSŐ HŐMÉRSÉKLET
+# UNIT_CONVERT DP-K KIZÁRÁSA
+#
+# Ezek NEM mérési adatok.
 # ============================================================
 
-def get_outdoor_temperature(status):
+def is_unit_setting(code):
 
-    if OUTDOOR_TEMPERATURE not in status:
+    text = str(code).lower()
 
-        print(
-            "FIGYELEM: nincs "
-            "outdoor_temperature DP!"
+    forbidden = (
+        "unit_convert",
+        "unitconvert",
+        "time_mode",
+        "backlight",
+    )
+
+    for item in forbidden:
+
+        if item in text:
+
+            return True
+
+    return False
+
+
+# ============================================================
+# PROPERTY KERESÉSE
+# ============================================================
+
+def find_property(
+    shadow,
+    exact_names,
+    keywords
+):
+
+    # --------------------------------------------------------
+    # 1. Pontos kód
+    # --------------------------------------------------------
+
+    for name in exact_names:
+
+        if name in shadow:
+
+            return name
+
+
+    # --------------------------------------------------------
+    # 2. Kulcsszavas keresés
+    # --------------------------------------------------------
+
+    candidates = []
+
+
+    for code, data in shadow.items():
+
+        if is_unit_setting(code):
+
+            continue
+
+
+        custom_name = str(
+            data.get(
+                "custom_name",
+                ""
+            )
+        ).lower()
+
+
+        text = (
+            str(code).lower()
+            + " "
+            + custom_name
         )
 
+
+        score = 0
+
+
+        for keyword in keywords:
+
+            if keyword in text:
+
+                score += 1
+
+
+        if score > 0:
+
+            candidates.append(
+                (
+                    score,
+                    code
+                )
+            )
+
+
+    if not candidates:
+
         return None
 
-    raw = to_float(
-        status[
-            OUTDOOR_TEMPERATURE
-        ]
+
+    candidates.sort(
+        reverse=True
     )
 
-    if raw is None:
 
-        return None
+    return candidates[0][1]
 
-    # A készülék 0,1 °C felbontásban adja.
-    temperature_c = raw / 10.0
 
-    print(
-        f"KÜLSŐ HŐMÉRSÉKLET: "
-        f"{raw} -> "
-        f"{temperature_c:.1f} °C"
-    )
+# ============================================================
+# KÜLSŐ HŐMÉRSÉKLET KERESÉSE
+#
+# FONTOS:
+# ELSŐDLEGESEN KÜLSŐ HŐMÉRSÉKLETET KERESÜNK.
+# NEM az indoor_temperature-t.
+# ============================================================
 
-    if not -60 <= temperature_c <= 70:
+def find_outdoor_temperature(shadow):
 
-        print(
-            "FIGYELEM: a külső "
-            "hőmérséklet értéke "
-            "életszerűtlen."
+    return find_property(
+        shadow,
+
+        (
+            "outdoor_temperature",
+            "outdoor_temp",
+            "temperature_outdoor",
+            "temp_outdoor",
+            "va_temperature",
+        ),
+
+        (
+            "outdoor_temperature",
+            "outdoor_temp",
+            "temperature_outdoor",
+            "temp_outdoor",
+            "outside_temperature",
+            "outside_temp",
         )
-
-        return None
-
-    return temperature_c
-
-
-# ============================================================
-# BELSŐ HŐMÉRSÉKLET
-# ============================================================
-
-def get_indoor_temperature(status):
-
-    if INDOOR_TEMPERATURE not in status:
-
-        return None
-
-    raw = to_float(
-        status[
-            INDOOR_TEMPERATURE
-        ]
     )
-
-    if raw is None:
-
-        return None
-
-    temperature_c = raw / 10.0
-
-    print(
-        f"BELSŐ HŐMÉRSÉKLET: "
-        f"{raw} -> "
-        f"{temperature_c:.1f} °C"
-    )
-
-    if not -60 <= temperature_c <= 70:
-
-        return None
-
-    return temperature_c
 
 
 # ============================================================
 # KÜLSŐ PÁRATARTALOM
 # ============================================================
 
-def get_outdoor_humidity(status):
+def find_outdoor_humidity(shadow):
 
-    if OUTDOOR_HUMIDITY not in status:
+    return find_property(
+        shadow,
 
-        print(
-            "FIGYELEM: nincs "
-            "outdoor_humidity DP!"
+        (
+            "outdoor_humidity",
+            "humidity_outdoor",
+            "hum_outdoor",
+            "va_humidity",
+        ),
+
+        (
+            "outdoor_humidity",
+            "humidity_outdoor",
+            "hum_outdoor",
+            "outside_humidity",
         )
-
-        return None
-
-    humidity = to_float(
-        status[
-            OUTDOOR_HUMIDITY
-        ]
     )
-
-    if humidity is None:
-
-        return None
-
-    print(
-        f"KÜLSŐ PÁRATARTALOM: "
-        f"{humidity:.0f} %"
-    )
-
-    if not 0 <= humidity <= 100:
-
-        return None
-
-    return humidity
-
-
-# ============================================================
-# BELSŐ PÁRATARTALOM
-# ============================================================
-
-def get_indoor_humidity(status):
-
-    if INDOOR_HUMIDITY not in status:
-
-        return None
-
-    humidity = to_float(
-        status[
-            INDOOR_HUMIDITY
-        ]
-    )
-
-    if humidity is None:
-
-        return None
-
-    if not 0 <= humidity <= 100:
-
-        return None
-
-    print(
-        f"BELSŐ PÁRATARTALOM: "
-        f"{humidity:.0f} %"
-    )
-
-    return humidity
 
 
 # ============================================================
 # LÉGNYOMÁS
 # ============================================================
 
-def get_pressure(status):
+def find_pressure(shadow):
 
-    if PRESSURE not in status:
+    return find_property(
+        shadow,
 
-        print(
-            "FIGYELEM: nincs "
-            "indoor_pressure DP!"
+        (
+            "indoor_pressure",
+            "pressure",
+            "barometric_pressure",
+            "pressure_value",
+        ),
+
+        (
+            "pressure",
+            "barometer",
+            "barometric",
         )
-
-        return None
-
-    raw = to_float(
-        status[
-            PRESSURE
-        ]
     )
-
-    if raw is None:
-
-        return None
-
-    # 100120 -> 1001.20 hPa
-
-    pressure_hpa = raw / 100.0
-
-    print(
-        f"LÉGNYOMÁS: "
-        f"{raw} -> "
-        f"{pressure_hpa:.2f} hPa"
-    )
-
-    if not 850 <= pressure_hpa <= 1100:
-
-        print(
-            "FIGYELEM: a légnyomás "
-            "értéke életszerűtlen."
-        )
-
-        return None
-
-    return pressure_hpa
 
 
 # ============================================================
 # SZÉLSEBESSÉG
 # ============================================================
 
-def get_wind_speed(status):
+def find_wind_speed(shadow):
 
-    if WIND_SPEED not in status:
+    return find_property(
+        shadow,
 
-        return None
+        (
+            "wind_speed",
+            "windspeed",
+            "wind_speed_current",
+        ),
 
-    raw = to_float(
-        status[
-            WIND_SPEED
-        ]
+        (
+            "wind_speed",
+            "windspeed",
+        )
     )
-
-    if raw is None:
-
-        return None
-
-    # A készülék km/h-ban adja,
-    # 0,1 km/h felbontással.
-
-    kmh = raw / 10.0
-
-    mph = kmh * 0.621371192
-
-    print(
-        f"SZÉLSEBESSÉG: "
-        f"{raw} -> "
-        f"{kmh:.1f} km/h -> "
-        f"{mph:.1f} mph"
-    )
-
-    if not 0 <= mph <= 200:
-
-        return None
-
-    return mph
 
 
 # ============================================================
 # SZÉLLÖKÉS
 # ============================================================
 
-def get_wind_gust(status):
+def find_wind_gust(shadow):
 
-    if WIND_GUST not in status:
+    return find_property(
+        shadow,
 
-        return None
+        (
+            "wind_gust",
+            "windgust",
+            "gust_speed",
+        ),
 
-    raw = to_float(
-        status[
-            WIND_GUST
-        ]
+        (
+            "wind_gust",
+            "windgust",
+            "gust",
+        )
     )
-
-    if raw is None:
-
-        return None
-
-    kmh = raw / 10.0
-
-    mph = kmh * 0.621371192
-
-    print(
-        f"SZÉLLÖKÉS: "
-        f"{raw} -> "
-        f"{kmh:.1f} km/h -> "
-        f"{mph:.1f} mph"
-    )
-
-    if not 0 <= mph <= 250:
-
-        return None
-
-    return mph
 
 
 # ============================================================
 # CSAPADÉK
 # ============================================================
 
-def get_rain(status):
+def find_rain(shadow):
 
-    if RAIN not in status:
+    return find_property(
+        shadow,
 
-        return None
+        (
+            "rainfall",
+            "rain",
+            "rain_amount",
+            "precipitation",
+        ),
 
-    raw = to_float(
-        status[
-            RAIN
-        ]
+        (
+            "rainfall",
+            "rain",
+            "precipitation",
+        )
     )
 
-    if raw is None:
 
-        return None
+# ============================================================
+# UV
+# ============================================================
 
-    # A készülék mm-ben adja.
-    #
-    # A logban 0 volt, ezért:
-    # 0 mm -> 0 inch
+def find_uv(shadow):
 
-    rain_mm = raw / 10.0
+    return find_property(
+        shadow,
 
-    rain_inches = rain_mm / 25.4
+        (
+            "uvi",
+            "uv_index",
+            "uv",
+        ),
+
+        (
+            "uvi",
+            "uv_index",
+        )
+    )
+
+
+# ============================================================
+# MÉRT ADATOK FELDOLGOZÁSA
+# ============================================================
+
+def build_weather_data(shadow):
+
+    print()
+    print("=" * 60)
+    print("IDŐJÁRÁSI ADATOK FELISMERÉSE")
+    print("=" * 60)
+
+
+    # --------------------------------------------------------
+    # DP-k megkeresése
+    # --------------------------------------------------------
+
+    temp_code = find_outdoor_temperature(
+        shadow
+    )
+
+    humidity_code = find_outdoor_humidity(
+        shadow
+    )
+
+    pressure_code = find_pressure(
+        shadow
+    )
+
+    wind_code = find_wind_speed(
+        shadow
+    )
+
+    gust_code = find_wind_gust(
+        shadow
+    )
+
+    rain_code = find_rain(
+        shadow
+    )
+
+    uv_code = find_uv(
+        shadow
+    )
+
 
     print(
-        f"CSAPADÉK: "
-        f"{raw} -> "
-        f"{rain_mm:.1f} mm -> "
-        f"{rain_inches:.3f} inch"
+        f"Külső hőmérséklet DP: "
+        f"{temp_code or 'NINCS'}"
     )
-
-    if not 0 <= rain_inches <= 100:
-
-        return None
-
-    return rain_inches
-
-
-# ============================================================
-# UV INDEX
-# ============================================================
-
-def get_uv(status):
-
-    if UV_INDEX not in status:
-
-        return None
-
-    uv = to_float(
-        status[
-            UV_INDEX
-        ]
-    )
-
-    if uv is None:
-
-        return None
 
     print(
-        f"UV INDEX: {uv}"
+        f"Külső páratartalom DP: "
+        f"{humidity_code or 'NINCS'}"
     )
 
-    if not 0 <= uv <= 20:
+    print(
+        f"Légnyomás DP: "
+        f"{pressure_code or 'NINCS'}"
+    )
 
-        return None
+    print(
+        f"Szélsebesség DP: "
+        f"{wind_code or 'NINCS'}"
+    )
 
-    return uv
+    print(
+        f"Széllökés DP: "
+        f"{gust_code or 'NINCS'}"
+    )
+
+    print(
+        f"Csapadék DP: "
+        f"{rain_code or 'NINCS'}"
+    )
+
+    print(
+        f"UV DP: "
+        f"{uv_code or 'NINCS'}"
+    )
+
+
+    payload = {}
+
+
+    # ========================================================
+    # KÜLSŐ HŐMÉRSÉKLET
+    # ========================================================
+
+    if temp_code:
+
+        raw = number(
+            shadow[temp_code]["value"]
+        )
+
+        if raw is not None:
+
+            # A Tuya időjárásállomásoknál a
+            # tizedfokos érték:
+            #
+            # 308 -> 30.8 °C
+
+            temp_c = raw / 10.0
+
+
+            print()
+            print(
+                f"KÜLSŐ HŐMÉRSÉKLET: "
+                f"{raw} -> "
+                f"{temp_c:.1f} °C"
+            )
+
+
+            if -60 <= temp_c <= 70:
+
+                temp_f = (
+                    temp_c * 9.0 / 5.0
+                    + 32.0
+                )
+
+                payload["tempf"] = (
+                    f"{temp_f:.1f}"
+                )
+
+
+    # ========================================================
+    # KÜLSŐ PÁRATARTALOM
+    # ========================================================
+
+    if humidity_code:
+
+        raw = number(
+            shadow[humidity_code]["value"]
+        )
+
+        if raw is not None:
+
+            humidity = raw
+
+
+            print()
+            print(
+                f"KÜLSŐ PÁRATARTALOM: "
+                f"{humidity:.0f} %"
+            )
+
+
+            if 0 <= humidity <= 100:
+
+                payload["humidity"] = str(
+                    int(
+                        round(
+                            humidity
+                        )
+                    )
+                )
+
+
+    # ========================================================
+    # LÉGNYOMÁS
+    # ========================================================
+
+    if pressure_code:
+
+        raw = number(
+            shadow[pressure_code]["value"]
+        )
+
+        if raw is not None:
+
+            # Példa:
+            #
+            # 100120 -> 1001.20 hPa
+
+            pressure_hpa = raw / 100.0
+
+
+            print()
+            print(
+                f"LÉGNYOMÁS: "
+                f"{raw} -> "
+                f"{pressure_hpa:.2f} hPa"
+            )
+
+
+            if 850 <= pressure_hpa <= 1100:
+
+                # hPa -> inch Hg
+
+                pressure_inhg = (
+                    pressure_hpa
+                    * 0.0295299830714
+                )
+
+                payload["baromin"] = (
+                    f"{pressure_inhg:.3f}"
+                )
+
+
+    # ========================================================
+    # SZÉLSEBESSÉG
+    # ========================================================
+
+    if wind_code:
+
+        raw = number(
+            shadow[wind_code]["value"]
+        )
+
+        if raw is not None:
+
+            # A készülék beállítása:
+            #
+            # windspeed_unit_convert = kmph
+            #
+            # A mért érték tizedes km/h.
+
+            kmh = raw / 10.0
+
+            mph = (
+                kmh
+                * 0.621371192
+            )
+
+
+            print()
+            print(
+                f"SZÉLSEBESSÉG: "
+                f"{raw} -> "
+                f"{kmh:.1f} km/h -> "
+                f"{mph:.1f} mph"
+            )
+
+
+            if 0 <= mph <= 200:
+
+                payload[
+                    "windspeedmph"
+                ] = f"{mph:.1f}"
+
+
+    # ========================================================
+    # SZÉLLÖKÉS
+    # ========================================================
+
+    if gust_code:
+
+        raw = number(
+            shadow[gust_code]["value"]
+        )
+
+        if raw is not None:
+
+            kmh = raw / 10.0
+
+            mph = (
+                kmh
+                * 0.621371192
+            )
+
+
+            print()
+            print(
+                f"SZÉLLÖKÉS: "
+                f"{raw} -> "
+                f"{kmh:.1f} km/h -> "
+                f"{mph:.1f} mph"
+            )
+
+
+            if 0 <= mph <= 250:
+
+                payload[
+                    "windgustmph"
+                ] = f"{mph:.1f}"
+
+
+    # ========================================================
+    # CSAPADÉK
+    # ========================================================
+
+    if rain_code:
+
+        raw = number(
+            shadow[rain_code]["value"]
+        )
+
+        if raw is not None:
+
+            # mm / 10
+
+            rain_mm = raw / 10.0
+
+            rain_inch = (
+                rain_mm / 25.4
+            )
+
+
+            print()
+            print(
+                f"CSAPADÉK: "
+                f"{raw} -> "
+                f"{rain_mm:.1f} mm -> "
+                f"{rain_inch:.3f} inch"
+            )
+
+
+            if 0 <= rain_inch <= 100:
+
+                payload["rainin"] = (
+                    f"{rain_inch:.3f}"
+                )
+
+
+    # ========================================================
+    # UV
+    # ========================================================
+
+    if uv_code:
+
+        raw = number(
+            shadow[uv_code]["value"]
+        )
+
+        if raw is not None:
+
+            print()
+            print(
+                f"UV INDEX: {raw}"
+            )
+
+            if 0 <= raw <= 20:
+
+                payload["UV"] = (
+                    f"{raw:.1f}"
+                )
+
+
+    # ========================================================
+    # EREDMÉNY
+    # ========================================================
+
+    print()
+    print("=" * 60)
+    print("WEATHER UNDERGROUND PAYLOAD")
+    print("=" * 60)
+
+
+    if payload:
+
+        for key, value in payload.items():
+
+            print(
+                f"{key} = {value}"
+            )
+
+    else:
+
+        print(
+            "NINCS FELISMERT MÉRT ADAT!"
+        )
+
+
+    print("=" * 60)
+
+
+    return payload
 
 
 # ============================================================
-# WEATHER UNDERGROUND
+# WEATHER UNDERGROUND FELTÖLTÉS
 # ============================================================
 
-def upload_to_wunderground(
-    payload
-):
+def upload_to_wu(payload):
+
+    if not payload:
+
+        raise RuntimeError(
+            "Nincs feltölthető időjárási adat."
+        )
+
 
     url = (
         "https://weatherstation.wunderground.com/"
         "weatherstation/updateweatherstation.php"
     )
+
 
     params = {
         "ID": WU_STATION_ID,
@@ -551,9 +977,11 @@ def upload_to_wunderground(
         "action": "updateraw",
     }
 
+
     params.update(
         payload
     )
+
 
     print()
     print("=" * 60)
@@ -562,11 +990,6 @@ def upload_to_wunderground(
     )
     print("=" * 60)
 
-    for key, value in payload.items():
-
-        print(
-            f"{key} = {value}"
-        )
 
     response = requests.get(
         url,
@@ -574,11 +997,12 @@ def upload_to_wunderground(
         timeout=30
     )
 
+
     response.raise_for_status()
 
-    print()
+
     print(
-        f"WU HTTP: "
+        f"HTTP státusz: "
         f"{response.status_code}"
     )
 
@@ -598,190 +1022,81 @@ def main():
 
     check_environment()
 
-    cloud = create_tuya_cloud()
 
-    status = get_tuya_status(
+    # --------------------------------------------------------
+    # Tuya Cloud
+    # --------------------------------------------------------
+
+    cloud = create_cloud()
+
+
+    # --------------------------------------------------------
+    # Ez csak diagnosztika.
+    #
+    # Nálad várhatóan itt továbbra is csak a 6
+    # unit/time/backlight adat jelenik meg.
+    # --------------------------------------------------------
+
+    get_status(
         cloud
     )
 
-    print()
-    print("=" * 60)
-    print(
-        "ÉRZÉKELŐADATOK"
-    )
-    print("=" * 60)
 
     # --------------------------------------------------------
-    # FONTOS:
-    # KÜLSŐ HŐMÉRSÉKLETET HASZNÁLUNK!
+    # VALÓDI MÉRT ADATOK
+    #
+    # INNEN KELL JÖNNIÜK!
     # --------------------------------------------------------
 
-    outdoor_temperature = (
-        get_outdoor_temperature(
-            status
-        )
+    shadow = get_shadow_properties(
+        cloud
     )
 
-    outdoor_humidity = (
-        get_outdoor_humidity(
-            status
-        )
-    )
 
-    pressure = get_pressure(
-        status
-    )
-
-    wind_speed = get_wind_speed(
-        status
-    )
-
-    wind_gust = get_wind_gust(
-        status
-    )
-
-    rain = get_rain(
-        status
-    )
-
-    uv = get_uv(
-        status
-    )
-
-    print("=" * 60)
-
-
-    # ========================================================
-    # WEATHER UNDERGROUND ADATOK
-    # ========================================================
-
-    payload = {}
-
-
-    # Külső hőmérséklet
-    #
-    # WU Fahrenheitben várja.
-
-    if outdoor_temperature is not None:
-
-        temp_f = (
-            outdoor_temperature
-            * 9.0 / 5.0
-            + 32.0
-        )
-
-        payload["tempf"] = (
-            f"{temp_f:.1f}"
-        )
-
-
-    # Külső páratartalom
-
-    if outdoor_humidity is not None:
-
-        payload["humidity"] = str(
-            int(
-                round(
-                    outdoor_humidity
-                )
-            )
-        )
-
-
-    # Légnyomás
-    #
-    # WU baromin = inch Hg
-
-    if pressure is not None:
-
-        pressure_inhg = (
-            pressure
-            * 0.0295299830714
-        )
-
-        payload["baromin"] = (
-            f"{pressure_inhg:.3f}"
-        )
-
-
-    # Szélsebesség
-
-    if wind_speed is not None:
-
-        payload["windspeedmph"] = (
-            f"{wind_speed:.1f}"
-        )
-
-
-    # Széllökés
-
-    if wind_gust is not None:
-
-        payload["windgustmph"] = (
-            f"{wind_gust:.1f}"
-        )
-
-
-    # Csapadék
-
-    if rain is not None:
-
-        payload["rainin"] = (
-            f"{rain:.3f}"
-        )
-
-
-    # UV
-
-    if uv is not None:
-
-        payload["UV"] = (
-            f"{uv:.1f}"
-        )
-
-
-    print()
-    print("=" * 60)
-    print(
-        "WEATHER UNDERGROUND PAYLOAD"
-    )
-    print("=" * 60)
-
-    if not payload:
+    if not shadow:
 
         raise RuntimeError(
-            "Nem sikerült egyetlen "
-            "Weather Underground adatot "
-            "sem előállítani."
+            "A Tuya Shadow Properties üres. "
+            "A készülék nem jelentett mért "
+            "adatot a Tuya Cloud felé."
         )
 
-    for key, value in payload.items():
 
-        print(
-            f"{key} = {value}"
-        )
+    # --------------------------------------------------------
+    # Időjárási adatok
+    # --------------------------------------------------------
 
-    print("=" * 60)
-
-
-    # ========================================================
-    # FELTÖLTÉS
-    # ========================================================
-
-    upload_to_wunderground(
-        payload
+    payload = build_weather_data(
+        shadow
     )
+
+
+    # --------------------------------------------------------
+    # Feltöltés
+    # --------------------------------------------------------
+
+    if payload:
+
+        upload_to_wu(
+            payload
+        )
+
+    else:
+
+        raise RuntimeError(
+            "Nem sikerült időjárási adatot "
+            "felismerni a Tuya Shadowból."
+        )
+
 
     print()
     print("=" * 60)
-    print(
-        "SIKERES FUTTATÁS"
-    )
+    print("SIKERES FUTÁS")
     print("=" * 60)
 
 
 # ============================================================
-# PROGRAM INDÍTÁSA
+# INDÍTÁS
 # ============================================================
 
 if __name__ == "__main__":
