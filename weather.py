@@ -10,7 +10,7 @@ WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 def get_tuya_weather_data():
-    """Lekéri az adatokat a Tuya Cloud API státuszából és naplóiból."""
+    """Lekéri az adatokat a Tuya Cloud API státuszából a cloud.get() segítségével."""
     print("Kapcsolódás a Tuya Cloud API-hoz tinytuya-val...")
     
     cloud = tinytuya.Cloud(
@@ -21,7 +21,7 @@ def get_tuya_weather_data():
     
     data = {}
     
-    # 1. Hagyományos státusz lekérdezés (konfigurációk)
+    # 1. Alap getstatus
     try:
         response = cloud.getstatus(TUYA_DEVICE_ID)
         print(f"Alap getstatus válasz: {response}")
@@ -37,23 +37,23 @@ def get_tuya_weather_data():
     except Exception as e:
         print(f"Hiba a getstatus lekérdezésekor: {e}")
 
-    # 2. Megkíséreljük lekérni az eszköz naplóit / utolsó jelentett értékeit a Tuya Cloud API-ból
+    # 2. Részletes felhő státusz lekérdezése a helyes cloud.get() metódussal
     try:
-        # A Tuya IoT platform log/status history végpontja
         endpoint = f"/v1.0/iot-03/devices/{TUYA_DEVICE_ID}/status"
-        log_response = cloud.sendrequest('GET', endpoint)
-        print(f"Felhő státusz/log válasz: {log_response}")
+        log_response = cloud.get(endpoint)
+        print(f"Felhő státusz válasz (cloud.get): {log_response}")
         
         if isinstance(log_response, dict) and "result" in log_response:
             res = log_response.get("result", [])
             if isinstance(res, list):
                 for item in res:
-                    code = item.get("code")
-                    value = item.get("value")
-                    if code:
-                        data[code] = value
+                    if isinstance(item, dict):
+                        code = item.get("code")
+                        value = item.get("value")
+                        if code:
+                            data[code] = value
     except Exception as e:
-        print(f"Nem sikerült lekérni a felhő naplókat: {e}")
+        print(f"Nem sikerült lekérni a felhő státuszt: {e}")
 
     return data
 
@@ -61,7 +61,6 @@ def parse_sensor_data(raw_data):
     """Feldolgozza és a Weather Underground által elvárt formátumra alakítja az adatokat."""
     print(f"Összes gyűjtött kulcs-érték: {raw_data}")
     
-    # Kibővített kulcskeresés a felhőből kapott adatokhoz
     temp_raw = (
         raw_data.get("va_temperature") or 
         raw_data.get("temp_current") or 
@@ -106,7 +105,7 @@ def parse_sensor_data(raw_data):
         'tempf': f"{temperature_f:.1f}",
         'humidity': humidity,
         'barom': f"{pressure_inhg:.2f}",
-        'software': 'PythonTinyTuyaCloudLogScript 2.0'
+        'software': 'PythonTinyTuyaCloudLogScript 2.1'
     }
     return parsed
 
