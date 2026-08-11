@@ -1,8 +1,6 @@
 import os
-import time
-import hmac
-import hashlib
 import requests
+import tinytuya
 
 # --- 1. PROJEKT ÉS ESZKÖZ ADATOK (GITHUB SECRETS) ---
 ACCESS_ID = os.environ.get("TUYA_ACCESS_ID")
@@ -12,67 +10,79 @@ DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
-BASE_URL = "https://openapi.tuyaeu.com"
+def get_vevor_data():
+    # Csatlakozás a Tuya Cloudhoz az európai (eu) régióban tinytuya-val
+    cloud = tinytuya.Cloud(
+        apiRegion="eu",
+        apiKey=ACCESS_ID,
+        apiSecret=ACCESS_SECRET,
+        nodeId=DEVICE_ID
+    )
 
-# --- 2. TUYA HITELESÍTÉS (TOKEN LEKÉRÉS) ---
-def get_tuya_token():
-    t = str(int(time.time() * 1000))
-    url_path = "/v1.0/token?grant_type=1"
-    string_to_sign = f"{ACCESS_ID}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{url_path}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    
-    headers = {
-        "client_id": ACCESS_ID,
-        "sign": sign,
-        "t": t,
-        "sign_method": "HMAC-SHA256"
-    }
-    
-    res = requests.get(f"{BASE_URL}{url_path}", headers=headers)
-    if res.status_code == 200 and res.json().get("success"):
-        return res.json()["result"]["access_token"]
-    raise Exception(f"Token hiba: {res.text}")
+    data = {}
 
-# --- 3. TUYA TELJES ESZKÖZADATLAP LEKÉRÉSE ---
-def get_device_details(token):
-    t = str(int(time.time() * 1000))
-    path = f"/v1.0/devices/{DEVICE_ID}"
-    
-    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    
-    headers = {
-        "client_id": ACCESS_ID,
-        "access_token": token,
-        "sign": sign,
-        "t": t,
-        "sign_method": "HMAC-SHA256"
-    }
-    
-    res = requests.get(f"{BASE_URL}{path}", headers=headers)
-    print(f"\n--- Teljes eszköz adatlap válasz [{path}] ---")
-    print(f"Status: {res.status_code}")
-    print(f"Válasz: {res.text}")
-    
-    combined_data = {}
-    if res.status_code == 200 and res.json().get("success"):
-        result = res.json().get("result", {})
-        status_list = result.get("status", [])
-        for item in status_list:
-            if isinstance(item, dict) and "code" in item and "value" in item:
-                combined_data[str(item["code"])] = item["value"]
-                
-    return combined_data
+    # 1. Lépés: Fiókhoz tartozó eszközök lekérdezése (fiók szintű DP adatok)
+    try:
+        devices = cloud.getdevices()
+        print("\n--- Fiókhoz tartozó eszközök lekérdezése ---")
+        if isinstance(devices, list):
+            for dev in devices:
+                if dev.get("id") == DEVICE_ID or dev.get("node_id") == DEVICE_ID:
+                    print(f"Eszköz megtalálva: {dev.get('name')}")
+                    if "dps" in dev and isinstance(dev["dps"], dict):
+                        data.update(dev["dps"])
+                    if "status" in dev and isinstance(dev["status"], list):
+                        for item in dev["status"]:
+                            if isinstance(item, dict) and "code" in item and "value" in item:
+                                data[str(item["code"])] = item["value"]
+    except Exception as e:
+        print(f"Hiba a getdevices() során: {e}")
+
+    # 2. Lépés: Közvetlen eszköz státusz lekérése
+    try:
+        status = cloud.getstatus(DEVICE_ID)
+        print("\n--- Közvetlen eszköz státusz (getstatus) ---")
+        print(status)
+        if isinstance(status, dict) and status.get("success"):
+            result = status.get("result", [])
+            if isinstance(result, list):
+                for item in result:
+                    if isinstance(item, dict) and "code" in item and "value" in item:
+                        data[str(item["code"])] = item["value"]
+            elif isinstance(result, dict) and "dps" in result:
+                data.update(result["dps"])
+    except Exception as e:
+        print(f"Hiba a getstatus() során: {e}")
+
+    # 3. Lépés: Tulajdonságok lekérése (Properties)
+    try:
+        props = cloud.getproperties(DEVICE_ID)
+        print("\n--- Eszköz tulajdonságok (getproperties) ---")
+        print(props)
+        if isinstance(props, dict) and props.get("success"):
+            result = props.get("result", {})
+            if isinstance(result, dict):
+                properties = result.get("properties", [])
+                for p in properties:
+                    if isinstance(p, dict) and "code" in p and "value" in p:
+                        data[str(p["code"])] = p["value"]
+    except Exception as e:
+        print(f"Hiba a getproperties() során: {e}")
+
+    return data
 
 # --- FŐ PROGRAMFUTTATÁS ---
 try:
-    token = get_tuya_token()
-    data = get_device_details(token)
-    
-    print("\nFeltárt Tuya adatok:", data)
+    data = get_vevor_data()
+    print("\nÖsszegyűjtött szenzor adatok:", data)
 
-    # --- 4. ADATOK FELDOLGOZÁSA ---
-    temp_c = data.get("va_temperature", data.get("temp_outdoor", data.get("outdoor_temp", data.get("temp_current", 0))))
+    if not data:
+        print("Nem sikerült adatokat lekérni a Tuya Cloud-ból.")
+        exit(1)
+
+    # --- ADATOK FELDOLGOZÁSA ÉS ÁTALAKÍTÁSA ---
+    # Hőmérséklet (°C -> °F)
+    temp_c = data.get("va_temperature", data.get("temp_outdoor", data.get("outdoor_temp", data.get("101", 0))))
     try:
         temp_c = float(temp_c) if temp_c is not None else 0.0
         if temp_c > 80 or temp_c < -40:
@@ -80,23 +90,26 @@ try:
     except (ValueError, TypeError):
         temp_c = 0.0
     temp_f = (temp_c * 9/5) + 32
-    
-    humidity = data.get("humidity", data.get("va_humidity", data.get("humidity_outdoor", 0)))
+
+    # Páratartalom (%)
+    humidity = data.get("humidity", data.get("va_humidity", data.get("humidity_outdoor", data.get("102", 0))))
     try:
         humidity = int(float(humidity)) if humidity is not None else 0
     except (ValueError, TypeError):
         humidity = 0
 
-    wind_kmh = data.get("wind_speed", data.get("va_wind_speed", 0))
+    # Szélsebesség (km/h -> mph)
+    wind_kmh = data.get("wind_speed", data.get("va_wind_speed", data.get("103", 0)))
     try:
         wind_kmh = float(wind_kmh) if wind_kmh is not None else 0.0
-        if wind_kmh > 200: 
+        if wind_kmh > 200:
             wind_kmh = wind_kmh / 10.0
         wind_mph = wind_kmh * 0.621371
     except (ValueError, TypeError):
         wind_mph = 0.0
 
-    gust_kmh = data.get("wind_gust", data.get("va_gust", 0))
+    # Széllökés (km/h -> mph)
+    gust_kmh = data.get("wind_gust", data.get("va_gust", data.get("104", 0)))
     try:
         gust_kmh = float(gust_kmh) if gust_kmh is not None else 0.0
         if gust_kmh > 200:
@@ -105,13 +118,15 @@ try:
     except (ValueError, TypeError):
         gust_mph = 0.0
 
-    wind_dir = data.get("va_direction", data.get("wind_direction", 0))
+    # Szélirány (fok 0-360)
+    wind_dir = data.get("va_direction", data.get("wind_direction", data.get("105", 0)))
     try:
         wind_dir = int(float(wind_dir)) if wind_dir is not None else 0
     except (ValueError, TypeError):
         wind_dir = 0
 
-    baro_hpa = data.get("pressure_current", data.get("atmosphere", data.get("indoor_pressure", 1013.2)))
+    # Légnyomás (hPa -> inHg)
+    baro_hpa = data.get("pressure_current", data.get("atmosphere", data.get("indoor_pressure", data.get("106", 1013.2))))
     try:
         baro_hpa = float(baro_hpa) if baro_hpa is not None else 1013.2
         if baro_hpa > 5000:
@@ -122,7 +137,8 @@ try:
         baro_hpa = 1013.2
     baro_in = baro_hpa * 0.02953
 
-    rain_mm = data.get("rain_24h", data.get("rainfall", data.get("va_rain", 0)))
+    # Csapadék (mm -> hüvelyk)
+    rain_mm = data.get("rain_24h", data.get("rainfall", data.get("va_rain", data.get("107", 0))))
     try:
         rain_mm = float(rain_mm) if rain_mm is not None else 0.0
         if rain_mm > 500:
@@ -131,7 +147,13 @@ try:
     except (ValueError, TypeError):
         rain_in = 0.0
 
-    print(f"\nFeldolgozott értékek -> Temp: {round(temp_c,1)}°C, Para: {humidity}%, Szél: {round(wind_mph,1)} mph, Irány: {wind_dir}, Nyomás: {round(baro_in,2)} inHg")
+    print(f"\nKiszámított értékek:")
+    print(f"Hőmérséklet: {round(temp_c, 1)}°C ({round(temp_f, 1)}°F)")
+    print(f"Páratartalom: {humidity}%")
+    print(f"Szélsebesség: {round(wind_kmh, 1)} km/h ({round(wind_mph, 1)} mph)")
+    print(f"Szélirány: {wind_dir}°")
+    print(f"Légnyomás: {round(baro_hpa, 1)} hPa ({round(baro_in, 2)} inHg)")
+    print(f"Csapadék: {round(rain_mm, 1)} mm ({round(rain_in, 2)} in)")
 
     # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND-RA ---
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
@@ -147,12 +169,12 @@ try:
         "winddir": int(wind_dir),
         "baromin": round(baro_in, 2),
         "rainin": round(rain_in, 2),
-        "softwaretype": "TuyaWeatherGateway",
+        "softwaretype": "VevorYT60311Gateway",
         "action": "updateraw"
     }
     
     wu_response = requests.get(wu_url, params=params)
-    print(f"WU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
+    print(f"\nWU Válaszkód: {wu_response.status_code} - Üzenet: {wu_response.text}")
 
 except Exception as e:
     print("Hiba történt a futtatás során:", e)
