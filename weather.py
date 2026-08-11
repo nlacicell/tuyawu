@@ -10,7 +10,7 @@ WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 def get_tuya_weather_data():
-    """Lekéri az adatokat a Tuya Cloud eszközlistájából (getdevices)."""
+    """Lekéri az adatokat a Tuya Cloud API státuszából és naplóiból."""
     print("Kapcsolódás a Tuya Cloud API-hoz tinytuya-val...")
     
     cloud = tinytuya.Cloud(
@@ -21,30 +21,39 @@ def get_tuya_weather_data():
     
     data = {}
     
+    # 1. Hagyományos státusz lekérdezés (konfigurációk)
     try:
-        # Helyes metódusnév: getdevices() aláhúzás nélkül
-        devices = cloud.getdevices()
-        print(f"Lekért eszközök száma: {len(devices) if isinstance(devices, list) else 'Nem lista'}")
-        
-        if isinstance(devices, list):
-            for dev in devices:
-                if isinstance(dev, dict) and dev.get("id") == TUYA_DEVICE_ID:
-                    print(f"Megtalált céleszköz a listában: {dev.get('name')}")
-                    dev_status = dev.get("status", [])
-                    print(f"Eszköz státusz tömb a getdevices()-ből: {dev_status}")
-                    
-                    if isinstance(dev_status, list):
-                        for item in dev_status:
-                            if isinstance(item, dict):
-                                code = item.get("code")
-                                value = item.get("value")
-                                if code:
-                                    data[code] = value
-                    elif isinstance(dev_status, dict):
-                        for k, v in dev_status.items():
-                            data[k] = v
+        response = cloud.getstatus(TUYA_DEVICE_ID)
+        print(f"Alap getstatus válasz: {response}")
+        if isinstance(response, dict):
+            res = response.get("result", [])
+            if isinstance(res, list):
+                for item in res:
+                    if isinstance(item, dict):
+                        code = item.get("code")
+                        value = item.get("value")
+                        if code:
+                            data[code] = value
     except Exception as e:
-        print(f"Hiba a getdevices() lekérdezésekor: {e}")
+        print(f"Hiba a getstatus lekérdezésekor: {e}")
+
+    # 2. Megkíséreljük lekérni az eszköz naplóit / utolsó jelentett értékeit a Tuya Cloud API-ból
+    try:
+        # A Tuya IoT platform log/status history végpontja
+        endpoint = f"/v1.0/iot-03/devices/{TUYA_DEVICE_ID}/status"
+        log_response = cloud.sendrequest('GET', endpoint)
+        print(f"Felhő státusz/log válasz: {log_response}")
+        
+        if isinstance(log_response, dict) and "result" in log_response:
+            res = log_response.get("result", [])
+            if isinstance(res, list):
+                for item in res:
+                    code = item.get("code")
+                    value = item.get("value")
+                    if code:
+                        data[code] = value
+    except Exception as e:
+        print(f"Nem sikerült lekérni a felhő naplókat: {e}")
 
     return data
 
@@ -52,18 +61,21 @@ def parse_sensor_data(raw_data):
     """Feldolgozza és a Weather Underground által elvárt formátumra alakítja az adatokat."""
     print(f"Összes gyűjtött kulcs-érték: {raw_data}")
     
+    # Kibővített kulcskeresés a felhőből kapott adatokhoz
     temp_raw = (
         raw_data.get("va_temperature") or 
         raw_data.get("temp_current") or 
         raw_data.get("temperature") or 
         raw_data.get("solar_temperature") or 
-        raw_data.get("outdoor_temp") or 0
+        raw_data.get("outdoor_temp") or 
+        raw_data.get("temp") or 0
     )
     
     humidity = (
         raw_data.get("humidity") or 
         raw_data.get("va_humidity") or 
-        raw_data.get("outdoor_humidity") or 50
+        raw_data.get("outdoor_humidity") or 
+        raw_data.get("hum") or 50
     )
     
     pressure_raw = (
@@ -94,7 +106,7 @@ def parse_sensor_data(raw_data):
         'tempf': f"{temperature_f:.1f}",
         'humidity': humidity,
         'barom': f"{pressure_inhg:.2f}",
-        'software': 'PythonTinyTuyaWeatherScript 1.7'
+        'software': 'PythonTinyTuyaCloudLogScript 2.0'
     }
     return parsed
 
