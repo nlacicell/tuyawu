@@ -1,7 +1,6 @@
 name: Update Vevor Weather Data 2
 
 on:
-on:
   schedule:
     - cron: "*/5 * * * *"
 
