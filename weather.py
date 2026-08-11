@@ -9,9 +9,11 @@ TUYA_ACCESS_SECRET = os.environ.get("TUYA_ACCESS_SECRET")
 TUYA_DEVICE_ID = os.environ.get("TUYA_DEVICE_ID")
 WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
+TUYA_LOCAL_IP = os.environ.get("TUYA_LOCAL_IP", "")       # Opcionális helyi IP
+TUYA_LOCAL_KEY = os.environ.get("TUYA_LOCAL_KEY", "")     # Opcionális helyi Local Key
 
 def get_tuya_weather_data():
-    """Lekéri az adatokat a Tuya Cloud-ból, hibatűrően feldolgozva a válaszokat."""
+    """Lekéri az adatokat a Tuya Cloud-ból vagy helyi eszközként."""
     print("Kapcsolódás a Tuya Cloud API-hoz tinytuya-val...")
     
     cloud = tinytuya.Cloud(
@@ -22,7 +24,14 @@ def get_tuya_weather_data():
     
     data = {}
     
-    # 1. Státusz lekérdezése
+    # 1. Próbáljuk meg a felhőből a /functions vagy /specifications végpontot is lekérni, ha létezik
+    try:
+        spec = cloud.getdevice(TUYA_DEVICE_ID)
+        print(f"Eszközspecifikáció (getdevice): {spec}")
+    except Exception as e:
+        print(f"Nem sikerült a getdevice: {e}")
+
+    # 2. Hagyományos getstatus
     try:
         response = cloud.getstatus(TUYA_DEVICE_ID)
         print(f"Teljes getstatus válasz: {response}")
@@ -41,31 +50,19 @@ def get_tuya_weather_data():
     except Exception as e:
         print(f"Hiba a getstatus lekérdezésekor: {e}")
 
-    # 2. Tulajdonságok / specifikációk lekérdezése
-    try:
-        properties = cloud.getproperties(TUYA_DEVICE_ID)
-        print(f"Eszköz tulajdonságok (properties): {properties}")
-        if isinstance(properties, dict):
-            res = properties.get("result", {})
-            if isinstance(res, dict):
-                for sub_key in ["status", "functions"]:
-                    sub_list = res.get(sub_key, [])
-                    if isinstance(sub_list, list):
-                        for p in sub_list:
-                            if isinstance(p, dict):
-                                code = p.get("code")
-                                value = p.get("value") or p.get("status")
-                                if code and value is not None:
-                                    data[code] = value
-            elif isinstance(res, list):
-                for p in res:
-                    if isinstance(p, dict):
-                        code = p.get("code")
-                        value = p.get("value")
-                        if code and value is not None:
-                            data[code] = value
-    except Exception as e:
-        print(f"Nem sikerült lekérni a tulajdonságokat: {e}")
+    # 3. Ha van helyi IP és Local Key megadva, próbáljuk meg helyben is lekérni (helyi Tuya protokoll)
+    if TUYA_LOCAL_IP and TUYA_LOCAL_KEY:
+        try:
+            print(f"Helyi csatlakozás az eszközhöz ({TUYA_LOCAL_IP})...")
+            d = tinytuya.Device(TUYA_DEVICE_ID, TUYA_LOCAL_IP, TUYA_LOCAL_KEY)
+            d.set_version(3.3) # vagy 3.4
+            payload = d.status()
+            print(f"Helyi eszköz státusz (DPS): {payload}")
+            if "dps" in payload:
+                for dps_id, val in payload["dps"].items():
+                    data[f"dps_{dps_id}"] = val
+        except Exception as e:
+            print(f"Helyi lekérdezési hiba: {e}")
 
     return data
 
@@ -73,18 +70,22 @@ def parse_sensor_data(raw_data):
     """Feldolgozza és a Weather Underground által elvárt formátumra alakítja az adatokat."""
     print(f"Összes gyűjtött kulcs-érték: {raw_data}")
     
+    # Keresünk minden lehetséges kulcsot (beleértve a helyi DPS azonosítókat is, ha lennének)
     temp_raw = (
         raw_data.get("va_temperature") or 
         raw_data.get("temp_current") or 
         raw_data.get("temperature") or 
         raw_data.get("solar_temperature") or 
-        raw_data.get("outdoor_temp") or 0
+        raw_data.get("outdoor_temp") or 
+        raw_data.get("dps_1") or 
+        raw_data.get("dps_2") or 0
     )
     
     humidity = (
         raw_data.get("humidity") or 
         raw_data.get("va_humidity") or 
-        raw_data.get("outdoor_humidity") or 50
+        raw_data.get("outdoor_humidity") or 
+        raw_data.get("dps_3") or 50
     )
     
     pressure_raw = (
@@ -93,6 +94,16 @@ def parse_sensor_data(raw_data):
         raw_data.get("barometer") or 101325
     )
     
+    try:
+        temp_raw = float(temp_raw)
+    except:
+        temp_raw = 0.0
+
+    try:
+        humidity = int(humidity)
+    except:
+        humidity = 50
+
     # Hőmérséklet skálázás kezelése
     temperature_c = temp_raw / 10.0 if temp_raw > 100 else temp_raw
     temperature_f = (temperature_c * 9/5) + 32
@@ -105,7 +116,7 @@ def parse_sensor_data(raw_data):
         'tempf': f"{temperature_f:.1f}",
         'humidity': humidity,
         'barom': f"{pressure_inhg:.2f}",
-        'software': 'PythonTinyTuyaWeatherScript 1.2'
+        'software': 'PythonTinyTuyaWeatherScript 1.3'
     }
     return parsed
 
