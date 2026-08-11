@@ -33,45 +33,64 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (ÉLŐ ÁLLAPOT) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (TÖBB VÉGPONT PRÓBÁLÁSA) ---
 def get_weather_station_data(token):
     t = str(int(time.time() * 1000))
-    path = f"/v1.0/devices/{DEVICE_ID}/status"
-    
-    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
-    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-    
-    headers = {
-        "client_id": ACCESS_ID,
-        "access_token": token,
-        "sign": sign,
-        "t": t,
-        "sign_method": "HMAC-SHA256"
-    }
-    
-    res = requests.get(f"{BASE_URL}{path}", headers=headers)
     combined_data = {}
-    
-    if res.status_code == 200 and res.json().get("success"):
-        res_json = res.json()
-        print("Nyers Tuya státusz válasz:", res_json) # <-- Itt látni fogod az összes valós DP kódot!
-        
-        result_obj = res_json.get("result", [])
-        if isinstance(result_obj, list):
-            for item in result_obj:
-                if isinstance(item, dict) and "code" in item and "value" in item:
-                    combined_data[str(item["code"])] = item["value"]
-        return combined_data
-    else:
-        raise Exception(f"Tuya API hiba: {res.text}")
 
-try:
-    token = get_tuya_token()
-    data = get_weather_station_data(token)
-    
-    if not data:
-        print("Nem érkezett adat az eszközből.")
-        exit(1)
+    # 1. Megpróbáljuk a Shadow (eszköz reális állapota) végpontot, 2. A Properties-t, 3. A Status-t
+    endpoints = [
+        f"/v2.0/cloud/thing/{DEVICE_ID}/shadow",
+        f"/v1.0/devices/{DEVICE_ID}/properties",
+        f"/v1.0/devices/{DEVICE_ID}/status"
+    ]
+
+    for path in endpoints:
+        try:
+            string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
+            sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
+            
+            headers = {
+                "client_id": ACCESS_ID,
+                "access_token": token,
+                "sign": sign,
+                "t": t,
+                "sign_method": "HMAC-SHA256"
+            }
+            
+            res = requests.get(f"{BASE_URL}{path}", headers=headers)
+            if res.status_code == 200 and res.json().get("success"):
+                res_json = res.json()
+                print(f"Sikeres válasz a végpontról [{path}]:", res_json)
+                
+                result_obj = res_json.get("result", {})
+                
+                # Ha Shadow struktúrát kapunk vissza (v2.0 API)
+                if isinstance(result_obj, dict) and "properties" in result_obj:
+                    props = result_obj.get("properties", [])
+                    if isinstance(props, list):
+                        for item in props:
+                            if isinstance(item, dict) and "code" in item and "value" in item:
+                                combined_data[str(item["code"])] = item["value"]
+                                
+                # Ha sima tömböt kapunk (v1.0 status/properties)
+                elif isinstance(result_obj, list):
+                    for item in result_obj:
+                        if isinstance(item, dict) and "code" in item and "value" in item:
+                            combined_data[str(item["code"])] = item["value"]
+                            
+                # Ha más szótár struktúrát kapunk
+                elif isinstance(result_obj, dict):
+                    for sub_key in ["properties", "status"]:
+                        sub_list = result_obj.get(sub_key, [])
+                        if isinstance(sub_list, list):
+                            for item in sub_list:
+                                if isinstance(item, dict) and "code" in item and "value" in item:
+                                    combined_data[str(item["code"])] = item["value"]
+        except Exception as e:
+            print(f"Hiba a végpontnál [{path}]:", e)
+
+    return combined_data
 
     # --- 4. ADATOK FELDOLGOZÁSA (SZABVÁNYOS TUYA KÓDOKRA JAVÍTVA) ---
     
