@@ -11,7 +11,7 @@ WU_STATION_ID = os.environ.get("WU_STATION_ID")
 WU_STATION_KEY = os.environ.get("WU_STATION_KEY")
 
 def get_tuya_weather_data():
-    """Lekéri az adatokat a Tuya Cloud-ból, megvizsgálva az összes lehetséges státuszforrást."""
+    """Lekéri az adatokat a Tuya Cloud-ból, hibatűrően feldolgozva a válaszokat."""
     print("Kapcsolódás a Tuya Cloud API-hoz tinytuya-val...")
     
     cloud = tinytuya.Cloud(
@@ -20,45 +20,51 @@ def get_tuya_weather_data():
         apiSecret=TUYA_ACCESS_SECRET
     )
     
-    # 1. Próbálkozás: standard getstatus
-    response = cloud.getstatus(TUYA_DEVICE_ID)
-    print(f"Teljes getstatus válasz: {response}")
-    
     data = {}
     
-    # Ha a válasz direkt tartalmazza a kulcsokat vagy a result listát
-    status_list = []
-    if isinstance(response, dict):
-        if "result" in response:
-            res = response.get("result")
+    # 1. Státusz lekérdezése
+    try:
+        response = cloud.getstatus(TUYA_DEVICE_ID)
+        print(f"Teljes getstatus válasz: {response}")
+        if isinstance(response, dict):
+            res = response.get("result", [])
             if isinstance(res, list):
-                status_list = res
+                for item in res:
+                    if isinstance(item, dict):
+                        code = item.get("code")
+                        value = item.get("value")
+                        if code:
+                            data[code] = value
             elif isinstance(res, dict):
-                # Ha dict, alakítsuk listává
-                status_list = [{"code": k, "value": v} for k, v in res.items()]
-        elif "status" in response:
-            status_list = response.get("status", [])
-        else:
-            status_list = [{"code": k, "value": v} for k, v in response.items() if k not in ["success", "tid"]]
+                for k, v in res.items():
+                    data[k] = v
+    except Exception as e:
+        print(f"Hiba a getstatus lekérdezésekor: {e}")
 
-    for item in status_list:
-        if isinstance(item, dict):
-            code = item.get("code")
-            value = item.get("value")
-            if code:
-                data[code] = value
-                
-    # 2. Ha a fenti adatokból hiányoznak a szenzorok, próbáljuk meg lekérni az eszközspecifikus leírást/tulajdonságokat is
+    # 2. Tulajdonságok / specifikációk lekérdezése
     try:
         properties = cloud.getproperties(TUYA_DEVICE_ID)
         print(f"Eszköz tulajdonságok (properties): {properties}")
-        if isinstance(properties, dict) and "result" in properties:
-            prop_list = properties.get("result", [])
-            for p in prop_list:
-                code = p.get("code") or p.get("dp_id")
-                value = p.get("value") or p.get("status")
-                if code and value is not None and code not in data:
-                    data[code] = value
+        if isinstance(properties, dict):
+            res = properties.get("result", {})
+            if isinstance(res, dict):
+                # A result szótáron belül vizsgáljuk a 'status' és 'functions' listákat
+                for sub_key in ["status", "functions"]:
+                    sub_list = res.get(sub_key, [])
+                    if isinstance(sub_list, list):
+                        for p in sub_list:
+                            if isinstance(p, dict):
+                                code = p.get("code")
+                                value = p.get("value") or p.get("status")
+                                if code and value is not None:
+                                    data[code] = value
+            elif isinstance(res, list):
+                for p in res:
+                    if isinstance(p, dict):
+                        code = p.get("code")
+                        value = p.get("value")
+                        if code and value is not None:
+                            data[code] = value
     except Exception as e:
         print(f"Nem sikerült lekérni a tulajdonságokat: {e}")
 
@@ -66,8 +72,8 @@ def get_tuya_weather_data():
 
 def parse_sensor_data(raw_data):
     """Feldolgozza és a Weather Underground által elvárt formátumra alakítja az adatokat."""
-    print(raw_data)
-    # Részletesebb keresés a lehetséges Tuya szenzor kódokra (Vevor / Tuya weather station specifikus)
+    print(fÖsszes gyűjtött kulcs-érték: {raw_data})
+    
     temp_raw = (
         raw_data.get("va_temperature") or 
         raw_data.get("temp_current") or 
@@ -100,7 +106,7 @@ def parse_sensor_data(raw_data):
         'tempf': f"{temperature_f:.1f}",
         'humidity': humidity,
         'barom': f"{pressure_inhg:.2f}",
-        'software': 'PythonTinyTuyaWeatherScript 1.1'
+        'software': 'PythonTinyTuyaWeatherScript 1.2'
     }
     return parsed
 
@@ -123,8 +129,6 @@ def upload_to_wunderground(weather_data):
 if __name__ == "__main__":
     try:
         raw_data = get_tuya_weather_data()
-        print(f"Kigyűjtött nyers adatok: {raw_data}")
-        
         weather_payload = parse_sensor_data(raw_data)
         print(f"Feldolgozott adatok: {weather_payload}")
         
