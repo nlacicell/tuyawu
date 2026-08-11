@@ -33,20 +33,18 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL - TÖBB TÍPUSSAL) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL - RÉSZLETES STRUCT ALEMZÉS) ---
 def get_weather_station_data(token):
     combined_data = {}
     
     now_ms = int(time.time() * 1000)
     start_ms = now_ms - (24 * 60 * 60 * 1000) # 24 órás ablak
     
-    # Különböző log típusok lekérdezése (2: DP report/szenzor, 7: Standard report, 1: Online status)
     log_types_to_try = ["2", "7", "1"]
     
     for log_type in log_types_to_try:
         print(f"\n--- Probalkozas type={log_type} logokkal ---")
         
-        # Szigorú ABC sorrend: end_time, size, start_time, type
         query_string = f"end_time={now_ms}&size=100&start_time={start_ms}&type={log_type}"
         path = f"/v1.0/devices/{DEVICE_ID}/logs"
         path_with_query = f"{path}?{query_string}"
@@ -70,13 +68,21 @@ def get_weather_station_data(token):
                 logs = res_json.get("result", {}).get("logs", [])
                 print(f"Sikeres lekeres. Talalt adatsorok (type={log_type}): {len(logs)}")
                 
-                # A logok listája időrendben jön. Fordítva megyünk, hogy a legújabb érvényesüljön
                 for log_item in reversed(logs):
-                    code = log_item.get("code")
-                    value = log_item.get("value")
-                    if code and value is not None:
+                    print(f"  [NYERS LOG ELEM]: {log_item}")
+                    
+                    # Különböző Tuya kulcsstruktúrák felderítése
+                    code = log_item.get("code") or log_item.get("event_id") or log_item.get("dp_id") or log_item.get("status_code")
+                    
+                    value = None
+                    if "value" in log_item:
+                        value = log_item["value"]
+                    elif "event_value" in log_item:
+                        value = log_item["event_value"]
+                    
+                    if code is not None and value is not None:
                         combined_data[str(code)] = value
-                        print(f"--> Szenzor adat rögzítve: {code} = {value}")
+                        print(f"  --> Szenzor adat rögzítve: {code} = {value}")
             else:
                 print(f"Hiba a log lekeresnel (type={log_type}): {res.text}")
         except Exception as e:
@@ -90,7 +96,7 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("\nNem érkezett érdemi szenzor adat (log) az eszközből az elmúlt 24 órában.")
+        print("\nNem sikerült értelmezhető szenzor adatot kinyerni a logokból.")
         exit(1)
 
     print("\nEgyesitett Tuya adatbazis sikeresen felepult a logokbol.")
