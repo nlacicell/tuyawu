@@ -33,17 +33,17 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL - 24 ÓRÁS ABLAK) ---
 def get_weather_station_data(token):
     combined_data = {}
     
     now_ms = int(time.time() * 1000)
-    start_ms = now_ms - (30 * 60 * 1000) # Elmúlt 30 perc lekérdezése
+    # Kitoljuk az időablakot 24 órára, hogy biztosan találjunk adatot
+    start_ms = now_ms - (24 * 60 * 60 * 1000) 
 
-    # KULCSFONTOSSÁGÚ: A query paramétereket ABC sorrendben kell megadni az aláíráshoz!
-    # e: end_time, s: size, s: start_time, t: type
-    # A type=7 jelenti az eszköz által beküldött mérési adatokat (report)
-    query_string = f"end_time={now_ms}&size=100&start_time={start_ms}&type=7"
+    # KULCSFONTOSSÁGÚ: A query paramétereket szigorúan ABC sorrendben kell megadni az aláíráshoz!
+    # end_time, size, start_time (a type szűrőt kivettük)
+    query_string = f"end_time={now_ms}&size=100&start_time={start_ms}"
     path = f"/v1.0/devices/{DEVICE_ID}/logs"
     path_with_query = f"{path}?{query_string}"
 
@@ -64,7 +64,7 @@ def get_weather_station_data(token):
         if res.status_code == 200 and res.json().get("success"):
             res_json = res.json()
             logs = res_json.get("result", {}).get("logs", [])
-            print(f"Sikeres log lekeres. Talalt adatsorok szama: {len(logs)}")
+            print(f"Sikeres log lekeres. Talalt adatsorok szama az elmult 24 oraban: {len(logs)}")
             
             # A logok listája időrendben jön. Végigmegyünk rajta (fordítva, hogy a legújabb felülírja a régit)
             for log_item in reversed(logs):
@@ -86,7 +86,7 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("Nem érkezett érdemi adat (log) az eszközből az elmúlt 30 percben.")
+        print("Nem érkezett érdemi adat (log) az eszközből az elmúlt 24 órában sem.")
         exit(1)
 
     print("Egyesitett Tuya adatbazis sikeresen felepult a logokbol.")
