@@ -48,7 +48,6 @@ def get_tuya_weather_data():
         if isinstance(properties, dict):
             res = properties.get("result", {})
             if isinstance(res, dict):
-                # A result szótáron belül vizsgáljuk a 'status' és 'functions' listákat
                 for sub_key in ["status", "functions"]:
                     sub_list = res.get(sub_key, [])
                     if isinstance(sub_list, list):
@@ -72,7 +71,7 @@ def get_tuya_weather_data():
 
 def parse_sensor_data(raw_data):
     """Feldolgozza és a Weather Underground által elvárt formátumra alakítja az adatokat."""
-    print(fÖsszes gyűjtött kulcs-érték: {raw_data})
+    print(f"Összes gyűjtött kulcs-érték: {raw_data}")
     
     temp_raw = (
         raw_data.get("va_temperature") or 
