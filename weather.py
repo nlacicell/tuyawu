@@ -33,60 +33,50 @@ def get_tuya_token():
         return res.json()["result"]["access_token"]
     raise Exception(f"Token hiba: {res.text}")
 
-# --- 3. TUYA ADATOK LEKÉRÉSE (SPECIFIKÁCIÓ ÉS STÁTUSZ) ---
+# --- 3. TUYA ADATOK LEKÉRÉSE (LOG VÉGPONTRÓL) ---
 def get_weather_station_data(token):
-    t = str(int(time.time() * 1000))
     combined_data = {}
     
-    # Két fő végpontot kérdezünk le: a státuszt és a részletes specifikációt
-    endpoints = [
-        f"/v1.0/devices/{DEVICE_ID}/status",
-        f"/v1.0/devices/{DEVICE_ID}/specifications"
-    ]
+    now_ms = int(time.time() * 1000)
+    start_ms = now_ms - (30 * 60 * 1000) # Elmúlt 30 perc lekérdezése
+
+    # KULCSFONTOSSÁGÚ: A query paramétereket ABC sorrendben kell megadni az aláíráshoz!
+    # e: end_time, s: size, s: start_time, t: type
+    # A type=7 jelenti az eszköz által beküldött mérési adatokat (report)
+    query_string = f"end_time={now_ms}&size=100&start_time={start_ms}&type=7"
+    path = f"/v1.0/devices/{DEVICE_ID}/logs"
+    path_with_query = f"{path}?{query_string}"
+
+    t = str(int(time.time() * 1000))
+    string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path_with_query}"
+    sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
     
     headers = {
         "client_id": ACCESS_ID,
         "access_token": token,
+        "sign": sign,
+        "t": t,
         "sign_method": "HMAC-SHA256"
     }
-
-    for path in endpoints:
-        t = str(int(time.time() * 1000))
-        string_to_sign = f"{ACCESS_ID}{token}{t}GET\n{hashlib.sha256(b'').hexdigest()}\n\n{path}"
-        sign = hmac.new(ACCESS_SECRET.encode('utf-8'), string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest().upper()
-        
-        headers["sign"] = sign
-        headers["t"] = t
-        
-        try:
-            res = requests.get(f"{BASE_URL}{path}", headers=headers)
-            if res.status_code == 200 and res.json().get("success"):
-                res_json = res.json()
-                print(f"Sikeres valasz innen [{path}]:", res_json)
-                
-                result_obj = res_json.get("result", {})
-                
-                # Ha sima lista (mint a status végpontnál)
-                if isinstance(result_obj, list):
-                    for item in result_obj:
-                        if isinstance(item, dict) and "code" in item and "value" in item:
-                            combined_data[str(item["code"])] = item["value"]
-                            
-                # Ha szótár struktúra (mint a specifications végpontnál)
-                elif isinstance(result_obj, dict):
-                    # Végigmegyünk a specifikáció lehetséges adathelyein
-                    for sub_key in ["functions", "status", "properties"]:
-                        sub_list = result_obj.get(sub_key, [])
-                        if isinstance(sub_list, list):
-                            for item in sub_list:
-                                if isinstance(item, dict) and "code" in item:
-                                    # Ha van fix "value", elmentjük, ha nincs, megnézzük a típust
-                                    val = item.get("value")
-                                    combined_data[str(item["code"])] = val
-            else:
-                print(f"Sikertelen keres a vegponton [{path}]: {res.text}")
-        except Exception as e:
-            print(f"Hiba történt a(z) {path} lekeresekor: {e}")
+    
+    try:
+        res = requests.get(f"{BASE_URL}{path_with_query}", headers=headers)
+        if res.status_code == 200 and res.json().get("success"):
+            res_json = res.json()
+            logs = res_json.get("result", {}).get("logs", [])
+            print(f"Sikeres log lekeres. Talalt adatsorok szama: {len(logs)}")
+            
+            # A logok listája időrendben jön. Végigmegyünk rajta (fordítva, hogy a legújabb felülírja a régit)
+            for log_item in reversed(logs):
+                code = log_item.get("code")
+                value = log_item.get("value")
+                if code and value is not None:
+                    combined_data[str(code)] = value
+                    print(f"--> Szenzor adat rögzítve: {code} = {value}")
+        else:
+            print(f"Hiba a log lekeresnel: {res.text}")
+    except Exception as e:
+        print(f"Kivetel a log lekeresesekor: {e}")
 
     return combined_data
 
@@ -96,13 +86,13 @@ try:
     data = get_weather_station_data(token)
     
     if not data:
-        print("Nem erkezett adat az eszkozbol.")
+        print("Nem érkezett érdemi adat (log) az eszközből az elmúlt 30 percben.")
         exit(1)
 
-    print("Egyesitett Tuya adatbazis sikeresen felepult.")
+    print("Egyesitett Tuya adatbazis sikeresen felepult a logokbol.")
 
     # --- 4. ADATOK FELDOLGOZÁSA ---
-    # Ideiglenes fallback értékek, ha még nem látjuk a pontos kulcsot
+    
     temp_c = data.get("va_temperature", data.get("temp_outdoor", data.get("outdoor_temp", 0)))
     try:
         temp_c = float(temp_c) if temp_c is not None else 0.0
@@ -162,7 +152,7 @@ try:
     except (ValueError, TypeError):
         rain_in = 0.0
 
-    print(f"Feldolgozott ertekek -> Temp: {round(temp_c,1)}C, Para: {humidity}%, Szel: {round(wind_mph,1)} mph, Irany: {wind_dir}, Nyomas: {round(baro_in,2)} inHg")
+    print(f"Feldolgozott ertekek -> Temp: {round(temp_c,1)}°C, Para: {humidity}%, Szel: {round(wind_mph,1)} mph, Irany: {wind_dir}, Nyomas: {round(baro_in,2)} inHg")
 
     # --- 5. ADATFELTÖLTÉS A WEATHER UNDERGROUND-RA ---
     wu_url = "https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php"
