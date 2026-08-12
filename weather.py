@@ -3,7 +3,6 @@ import sys
 import json
 import requests
 import tinytuya
-import math
 
 
 # ============================================================
@@ -585,37 +584,21 @@ def find_uv(shadow):
 
 
 # ============================================================
-# HARMATPONT SZÁMÍTÁSA
-#
-# A Tuya állomás nem küld külön dew point DP-t.
-# A külső hőmérséklet + relatív páratartalom alapján
-# Magnus-formulával számoljuk ki.
-# ============================================================
-
-def calculate_dew_point(temp_c, humidity):
-    if temp_c is None or humidity is None:
-        return None
-
-    if not (-60 <= temp_c <= 70):
-        return None
-
-    if not (0 < humidity <= 100):
-        return None
-
-    a = 17.62
-    b = 243.12
-
-    gamma = (
-        math.log(humidity / 100.0)
-        + (a * temp_c) / (b + temp_c)
-    )
-
-    return b * gamma / (a - gamma)
-
-
-# ============================================================
 # MÉRT ADATOK FELDOLGOZÁSA
 # ============================================================
+
+def decode_wind_direction(raw_value):
+    """Kísérleti YT60307 szélirány-dekódolás.
+    A korábbi RAW logok alapján 0..15 értéket 16 irányú szektorként próbálunk.
+    """
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= value <= 15:
+        return value * 22.5
+    return None
+
 
 def build_weather_data(shadow):
 
@@ -694,6 +677,28 @@ def build_weather_data(shadow):
     )
 
 
+    # ========================================================
+    # SZÉLIRÁNY TESZT
+    # A YT60307 RAW adatban a 0e 01 XX mező XX byte-ját
+    # próbáljuk 16 irányú szektorként értelmezni.
+    # ========================================================
+    raw_wind_direction_value = None
+
+    # A build_weather_data() jelenlegi változói közül a shadow az egyetlen
+    # biztosan elérhető struktúra; itt keressük a 0e DP-t, ha jelen van.
+    try:
+        for item in shadow.values():
+            if isinstance(item, dict):
+                code = item.get("code")
+                dp_id = item.get("dp_id")
+                if code in ("wind_direction", "wind_dir") or dp_id == 14:
+                    raw_wind_direction_value = item.get("value")
+                    break
+    except Exception:
+        pass
+
+    wind_direction_deg = decode_wind_direction(raw_wind_direction_value)
+
     payload = {}
 
 
@@ -768,41 +773,6 @@ def build_weather_data(shadow):
                         )
                     )
                 )
-
-
-    # ========================================================
-    # HARMATPONT
-    #
-    # A Weather Underground külön dew point értéket vár.
-    # Ha a Tuya nem ad külön dew point DP-t, kiszámítjuk
-    # a külső hőmérséklet és páratartalom alapján.
-    # ========================================================
-
-    if temp_code and humidity_code:
-        temp_raw = number(shadow[temp_code]["value"])
-        humidity_raw = number(shadow[humidity_code]["value"])
-
-        if temp_raw is not None and humidity_raw is not None:
-            temp_c_for_dew = temp_raw / 10.0
-            humidity_for_dew = humidity_raw
-
-            dew_c = calculate_dew_point(
-                temp_c_for_dew,
-                humidity_for_dew
-            )
-
-            if dew_c is not None:
-                dew_f = dew_c * 9.0 / 5.0 + 32.0
-
-                print()
-                print(
-                    f"HARMATPONT: "
-                    f"{dew_c:.1f} °C -> "
-                    f"{dew_f:.1f} °F"
-                )
-
-                if -100 <= dew_f <= 150:
-                    payload["dewptf"] = f"{dew_f:.1f}"
 
 
     # ========================================================
@@ -991,6 +961,13 @@ def build_weather_data(shadow):
 
     print()
     print("=" * 60)
+    if wind_direction_deg is not None:
+        payload["winddir"] = str(int(round(wind_direction_deg)))
+        print(
+            f"SZÉLIRÁNY TESZT: RAW={raw_wind_direction_value} "
+            f"-> {wind_direction_deg:.0f}°"
+        )
+
     print("WEATHER UNDERGROUND PAYLOAD")
     print("=" * 60)
 
