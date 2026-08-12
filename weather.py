@@ -3,6 +3,7 @@ import sys
 import json
 import requests
 import tinytuya
+import math
 
 
 # ============================================================
@@ -584,6 +585,35 @@ def find_uv(shadow):
 
 
 # ============================================================
+# HARMATPONT SZÁMÍTÁSA
+#
+# A Tuya állomás nem küld külön dew point DP-t.
+# A külső hőmérséklet + relatív páratartalom alapján
+# Magnus-formulával számoljuk ki.
+# ============================================================
+
+def calculate_dew_point(temp_c, humidity):
+    if temp_c is None or humidity is None:
+        return None
+
+    if not (-60 <= temp_c <= 70):
+        return None
+
+    if not (0 < humidity <= 100):
+        return None
+
+    a = 17.62
+    b = 243.12
+
+    gamma = (
+        math.log(humidity / 100.0)
+        + (a * temp_c) / (b + temp_c)
+    )
+
+    return b * gamma / (a - gamma)
+
+
+# ============================================================
 # MÉRT ADATOK FELDOLGOZÁSA
 # ============================================================
 
@@ -738,6 +768,41 @@ def build_weather_data(shadow):
                         )
                     )
                 )
+
+
+    # ========================================================
+    # HARMATPONT
+    #
+    # A Weather Underground külön dew point értéket vár.
+    # Ha a Tuya nem ad külön dew point DP-t, kiszámítjuk
+    # a külső hőmérséklet és páratartalom alapján.
+    # ========================================================
+
+    if temp_code and humidity_code:
+        temp_raw = number(shadow[temp_code]["value"])
+        humidity_raw = number(shadow[humidity_code]["value"])
+
+        if temp_raw is not None and humidity_raw is not None:
+            temp_c_for_dew = temp_raw / 10.0
+            humidity_for_dew = humidity_raw
+
+            dew_c = calculate_dew_point(
+                temp_c_for_dew,
+                humidity_for_dew
+            )
+
+            if dew_c is not None:
+                dew_f = dew_c * 9.0 / 5.0 + 32.0
+
+                print()
+                print(
+                    f"HARMATPONT: "
+                    f"{dew_c:.1f} °C -> "
+                    f"{dew_f:.1f} °F"
+                )
+
+                if -100 <= dew_f <= 150:
+                    payload["dewptf"] = f"{dew_f:.1f}"
 
 
     # ========================================================
