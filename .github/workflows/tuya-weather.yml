@@ -2,7 +2,9 @@ name: Tuya Weather Update
 
 on:
   repository_dispatch:
-    types: [weather_update]
+    types:
+      - weather_update
+
   workflow_dispatch:
 
 permissions:
@@ -11,6 +13,7 @@ permissions:
 jobs:
   update-weather:
     runs-on: ubuntu-latest
+
     steps:
       - name: Repository letöltése
         uses: actions/checkout@v4
@@ -25,11 +28,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install tinytuya requests
 
-      - name: Tuya időjárási adatok lekérése
+      - name: Időjárási adatok lekérése és feltöltése
         env:
           TUYA_ACCESS_ID: ${{ secrets.TUYA_ACCESS_ID }}
           TUYA_ACCESS_SECRET: ${{ secrets.TUYA_ACCESS_SECRET }}
           TUYA_DEVICE_ID: ${{ secrets.TUYA_DEVICE_ID }}
           WU_STATION_ID: ${{ secrets.WU_STATION_ID }}
           WU_STATION_KEY: ${{ secrets.WU_STATION_KEY }}
-        run: python weather.py
+        run: |
+          python weather.py
