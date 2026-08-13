@@ -1,9 +1,10 @@
 import os
 import sys
 import json
+import base64
+import math
 import requests
 import tinytuya
-import math
 
 
 # ============================================================
@@ -585,37 +586,55 @@ def find_uv(shadow):
 
 
 # ============================================================
-# HARMATPONT SZÁMÍTÁSA
-#
-# A Tuya állomás nem küld külön dew point DP-t.
-# A külső hőmérséklet + relatív páratartalom alapján
-# Magnus-formulával számoljuk ki.
-# ============================================================
-
-def calculate_dew_point(temp_c, humidity):
-    if temp_c is None or humidity is None:
-        return None
-
-    if not (-60 <= temp_c <= 70):
-        return None
-
-    if not (0 < humidity <= 100):
-        return None
-
-    a = 17.62
-    b = 243.12
-
-    gamma = (
-        math.log(humidity / 100.0)
-        + (a * temp_c) / (b + temp_c)
-    )
-
-    return b * gamma / (a - gamma)
-
-
-# ============================================================
 # MÉRT ADATOK FELDOLGOZÁSA
 # ============================================================
+
+
+# ============================================================
+# YT60307 SZÉLIRÁNY DEKÓDOLÁSA
+#
+# A RAW DP113 (outdoor_alert_display) adatban:
+#
+#   01 09 02 XX XX
+#
+# A két XX bájt unsigned big-endian, közvetlen fokérték.
+# Például:
+#   00 B4 = 180°
+#   00 E4 = 228°
+#   01 30 = 304°
+#   01 4E = 334°
+#   01 64 = 356°
+# ============================================================
+
+def decode_yt60307_wind_direction(raw_base64):
+
+    if not raw_base64:
+        return None
+
+    try:
+        raw = base64.b64decode(
+            raw_base64,
+            validate=False
+        )
+    except Exception:
+        return None
+
+    marker = bytes([0x01, 0x09, 0x02])
+
+    for i in range(0, len(raw) - 4):
+        if raw[i:i + 3] == marker:
+
+            value = int.from_bytes(
+                raw[i + 3:i + 5],
+                byteorder="big",
+                signed=False
+            )
+
+            if 0 <= value <= 360:
+                return value
+
+    return None
+
 
 def build_weather_data(shadow):
 
@@ -698,6 +717,48 @@ def build_weather_data(shadow):
 
 
     # ========================================================
+    # SZÉLIRÁNY - DP113 RAW
+    # ========================================================
+
+    dp113 = shadow.get("outdoor_alert_display")
+
+    if isinstance(dp113, dict):
+
+        winddir = decode_yt60307_wind_direction(
+            dp113.get("value")
+        )
+
+        if winddir is not None:
+
+            print()
+            print(
+                f"YT60307 SZÉLIRÁNY: "
+                f"{winddir}°"
+            )
+
+            payload["winddir"] = str(
+                winddir
+            )
+
+        else:
+
+            print()
+            print(
+                "YT60307 SZÉLIRÁNY: "
+                "RAW mező nem található "
+                "vagy érvénytelen."
+            )
+
+    else:
+
+        print()
+        print(
+            "YT60307 SZÉLIRÁNY: "
+            "DP113 nem található."
+        )
+
+
+    # ========================================================
     # KÜLSŐ HŐMÉRSÉKLET
     # ========================================================
 
@@ -768,41 +829,6 @@ def build_weather_data(shadow):
                         )
                     )
                 )
-
-
-    # ========================================================
-    # HARMATPONT
-    #
-    # A Weather Underground külön dew point értéket vár.
-    # Ha a Tuya nem ad külön dew point DP-t, kiszámítjuk
-    # a külső hőmérséklet és páratartalom alapján.
-    # ========================================================
-
-    if temp_code and humidity_code:
-        temp_raw = number(shadow[temp_code]["value"])
-        humidity_raw = number(shadow[humidity_code]["value"])
-
-        if temp_raw is not None and humidity_raw is not None:
-            temp_c_for_dew = temp_raw / 10.0
-            humidity_for_dew = humidity_raw
-
-            dew_c = calculate_dew_point(
-                temp_c_for_dew,
-                humidity_for_dew
-            )
-
-            if dew_c is not None:
-                dew_f = dew_c * 9.0 / 5.0 + 32.0
-
-                print()
-                print(
-                    f"HARMATPONT: "
-                    f"{dew_c:.1f} °C -> "
-                    f"{dew_f:.1f} °F"
-                )
-
-                if -100 <= dew_f <= 150:
-                    payload["dewptf"] = f"{dew_f:.1f}"
 
 
     # ========================================================
