@@ -590,6 +590,20 @@ def find_uv(shadow):
 # ============================================================
 
 
+
+def calculate_dew_point_c(temp_c, humidity):
+    """Harmatpont számítása a külső hőmérséklet és RH alapján."""
+    if temp_c is None or humidity is None:
+        return None
+    if humidity <= 0 or humidity > 100:
+        return None
+
+    a = 17.62
+    b = 243.12
+    gamma = math.log(humidity / 100.0) + (a * temp_c) / (b + temp_c)
+    return b * gamma / (a - gamma)
+
+
 # ============================================================
 # YT60307 SZÉLIRÁNY DEKÓDOLÁSA
 #
@@ -830,6 +844,23 @@ def build_weather_data(shadow):
                     )
                 )
 
+
+
+    # ========================================================
+    # HARMATPONT
+    # ========================================================
+
+    if temp_c is not None and humidity is not None:
+        dew_c = calculate_dew_point_c(temp_c, humidity)
+
+        if dew_c is not None:
+            dew_f = dew_c * 9.0 / 5.0 + 32.0
+            payload["dewptf"] = f"{dew_f:.1f}"
+
+            print(
+                f"HARMATPONT: {dew_c:.1f} °C -> "
+                f"{dew_f:.1f} °F"
+            )
 
     # ========================================================
     # LÉGNYOMÁS
