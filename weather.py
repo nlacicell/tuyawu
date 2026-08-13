@@ -587,34 +587,6 @@ def find_uv(shadow):
 # MÉRT ADATOK FELDOLGOZÁSA
 # ============================================================
 
-def decode_yt60307_wind_direction(raw_base64):
-    """Kísérleti YT60307 szélirány-dekódolás.
-
-    A DP113 (outdoor_alert_display) Base64 RAW adatában a
-    0e 01 XX mező XX byte-ját vizsgáljuk.
-    A korábbi logokban XX = 0, 5, 6 volt.
-    Hipotézis: 0..15 = 16 szélirány-szektor, É-ről indulva.
-    """
-    if not raw_base64:
-        return None, None
-
-    try:
-        import base64
-        raw = base64.b64decode(raw_base64)
-    except Exception:
-        return None, None
-
-    # Search for: 0e 01 XX
-    for i in range(len(raw) - 2):
-        if raw[i] == 0x0E and raw[i + 1] == 0x01:
-            value = raw[i + 2]
-            if 0 <= value <= 15:
-                degrees = int(round(value * 22.5)) % 360
-                return value, degrees
-
-    return None, None
-
-
 def build_weather_data(shadow):
 
     print()
@@ -693,47 +665,6 @@ def build_weather_data(shadow):
 
 
     payload = {}
-
-    # ========================================================
-    # YT60307 SZÉLIRÁNY TESZT
-    #
-    # A szélirány-jelölt a DP113 outdoor_alert_display RAW
-    # Base64 adatában található, nem a normál Shadow DP értékek között.
-    # ========================================================
-
-    winddir_raw_value = None
-    winddir_degrees = None
-
-    try:
-        raw_dp113 = shadow.get("outdoor_alert_display")
-        if isinstance(raw_dp113, dict):
-            raw_b64 = raw_dp113.get("value")
-        else:
-            raw_b64 = None
-
-        winddir_raw_value, winddir_degrees = (
-            decode_yt60307_wind_direction(raw_b64)
-        )
-
-        if winddir_degrees is not None:
-            payload["winddir"] = str(winddir_degrees)
-
-            print(
-                f"YT60307 SZÉLIRÁNY TESZT: "
-                f"RAW={winddir_raw_value} -> "
-                f"{winddir_degrees}°"
-            )
-        else:
-            print(
-                "YT60307 SZÉLIRÁNY TESZT: "
-                "a 0e 01 XX mező nem található vagy nem 0..15."
-            )
-
-    except Exception as e:
-        print(
-            f"YT60307 SZÉLIRÁNY TESZT HIBA: {e}"
-        )
-
 
 
     # ========================================================
