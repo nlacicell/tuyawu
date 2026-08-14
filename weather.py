@@ -1,8 +1,6 @@
 import os
 import sys
 import json
-import base64
-import math
 import requests
 import tinytuya
 
@@ -590,65 +588,48 @@ def find_uv(shadow):
 # ============================================================
 
 
+def find_relative_pressure_candidates(shadow):
+    """Diagnosztika: relatív/tengerszinti nyomásra utaló property-k."""
+    keywords = (
+        "relative_pressure", "relativepressure", "pressure_relative",
+        "relative_barometric", "sea_level_pressure", "sealevelpressure",
+        "sea_level", "qnh", "rel_pressure"
+    )
+    results = []
+    for code, data in shadow.items():
+        t = (str(code).lower() + " " +
+             str(data.get("custom_name", "")).lower())
+        if any(k in t for k in keywords):
+            results.append((code, data))
+    return results
 
-def calculate_dew_point_c(temp_c, humidity):
-    """Harmatpont számítása a külső hőmérséklet és RH alapján."""
-    if temp_c is None or humidity is None:
-        return None
-    if humidity <= 0 or humidity > 100:
-        return None
 
-    a = 17.62
-    b = 243.12
-    gamma = math.log(humidity / 100.0) + (a * temp_c) / (b + temp_c)
-    return b * gamma / (a - gamma)
-
-
-# ============================================================
-# YT60307 SZÉLIRÁNY DEKÓDOLÁSA
-#
-# A RAW DP113 (outdoor_alert_display) adatban:
-#
-#   01 09 02 XX XX
-#
-# A két XX bájt unsigned big-endian, közvetlen fokérték.
-# Például:
-#   00 B4 = 180°
-#   00 E4 = 228°
-#   01 30 = 304°
-#   01 4E = 334°
-#   01 64 = 356°
-# ============================================================
-
-def decode_yt60307_wind_direction(raw_base64):
-
-    if not raw_base64:
-        return None
-
-    try:
-        raw = base64.b64decode(
-            raw_base64,
-            validate=False
-        )
-    except Exception:
-        return None
-
-    marker = bytes([0x01, 0x09, 0x02])
-
-    for i in range(0, len(raw) - 4):
-        if raw[i:i + 3] == marker:
-
-            value = int.from_bytes(
-                raw[i + 3:i + 5],
-                byteorder="big",
-                signed=False
+def print_light_diagnostics(shadow):
+    """Diagnosztika a fény/napsugárzás/W/m² property-khez.
+    A W/m² értéket egyelőre nem küldi a WU-ba."""
+    keywords = (
+        "light", "solar", "radiation", "irradiance",
+        "w_m2", "wm2", "w/m2", "optical"
+    )
+    print()
+    print("=" * 60)
+    print("W/m² / FÉNY / NAPSUGÁRZÁS DIAGNOSZTIKA")
+    print("=" * 60)
+    found = False
+    for code, data in shadow.items():
+        t = (str(code).lower() + " " +
+             str(data.get("custom_name", "")).lower())
+        if any(k in t for k in keywords):
+            found = True
+            print(
+                f"{code}: value={data.get('value')!r}, "
+                f"dp={data.get('dp_id')!r}, "
+                f"name={data.get('custom_name', '')!r}, "
+                f"time={data.get('time')!r}"
             )
-
-            if 0 <= value <= 360:
-                return value
-
-    return None
-
+    if not found:
+        print("Nem találtam fény/napsugárzás nevű property-t.")
+    print("=" * 60)
 
 def build_weather_data(shadow):
 
@@ -673,6 +654,32 @@ def build_weather_data(shadow):
     pressure_code = find_pressure(
         shadow
     )
+
+    # --------------------------------------------------------
+    # RELATÍV / TENGERSZINTI NYOMÁS DIAGNOSZTIKA
+    # --------------------------------------------------------
+    relative_candidates = find_relative_pressure_candidates(shadow)
+
+    print()
+    print("=" * 60)
+    print("RELATÍV / TENGERSZINTI NYOMÁS DIAGNOSZTIKA")
+    print("=" * 60)
+
+    if relative_candidates:
+        for code, data in relative_candidates:
+            print(
+                f"{code}: value={data.get('value')!r}, "
+                f"dp={data.get('dp_id')!r}, "
+                f"name={data.get('custom_name', '')!r}, "
+                f"time={data.get('time')!r}"
+            )
+    else:
+        print(
+            "Nincs név alapján azonosítható relative/QNH/"
+            "sea-level pressure property."
+        )
+
+    print("=" * 60)
 
     wind_code = find_wind_speed(
         shadow
@@ -702,7 +709,7 @@ def build_weather_data(shadow):
     )
 
     print(
-        f"Légnyomás DP: "
+        f"Légnyomás jelenlegi DP: "
         f"{pressure_code or 'NINCS'}"
     )
 
@@ -728,48 +735,6 @@ def build_weather_data(shadow):
 
 
     payload = {}
-
-
-    # ========================================================
-    # SZÉLIRÁNY - DP113 RAW
-    # ========================================================
-
-    dp113 = shadow.get("outdoor_alert_display")
-
-    if isinstance(dp113, dict):
-
-        winddir = decode_yt60307_wind_direction(
-            dp113.get("value")
-        )
-
-        if winddir is not None:
-
-            print()
-            print(
-                f"YT60307 SZÉLIRÁNY: "
-                f"{winddir}°"
-            )
-
-            payload["winddir"] = str(
-                winddir
-            )
-
-        else:
-
-            print()
-            print(
-                "YT60307 SZÉLIRÁNY: "
-                "RAW mező nem található "
-                "vagy érvénytelen."
-            )
-
-    else:
-
-        print()
-        print(
-            "YT60307 SZÉLIRÁNY: "
-            "DP113 nem található."
-        )
 
 
     # ========================================================
@@ -844,23 +809,6 @@ def build_weather_data(shadow):
                     )
                 )
 
-
-
-    # ========================================================
-    # HARMATPONT
-    # ========================================================
-
-    if temp_c is not None and humidity is not None:
-        dew_c = calculate_dew_point_c(temp_c, humidity)
-
-        if dew_c is not None:
-            dew_f = dew_c * 9.0 / 5.0 + 32.0
-            payload["dewptf"] = f"{dew_f:.1f}"
-
-            print(
-                f"HARMATPONT: {dew_c:.1f} °C -> "
-                f"{dew_f:.1f} °F"
-            )
 
     # ========================================================
     # LÉGNYOMÁS
@@ -1041,6 +989,11 @@ def build_weather_data(shadow):
                     f"{raw:.1f}"
                 )
 
+
+    # ========================================================
+    # W/m² DIAGNOSZTIKA
+    # ========================================================
+    print_light_diagnostics(shadow)
 
     # ========================================================
     # EREDMÉNY
